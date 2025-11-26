@@ -24,7 +24,9 @@ function attachChips() {
         chip.className = "dssi-chip";
         chip.innerHTML = `
             <span class="dssi-chip-title">ℹ️ 技術情報: キー入力イベント</span>
-            このフィールドへの入力操作は、スクリプトにより取得可能です。<br>
+            【注意喚起】このフィールドへの入力操作は、スクリプトにより取得可能です。<br>
+            【目的】 この技術は通常、ショートカットキーや入力補助などの「利便性」のために使われます。<br>
+            【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。<br>
             <strong>推奨:</strong> キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。
         `;
         document.body.appendChild(chip);
