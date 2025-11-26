@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "DSSI: Digital Sovereignty Support Interface",
+  "version": "0.1.0",
+  "description": "「信頼」を製品とする、デジタル主権のための仲介レイヤー。自動入力を拒否し、事実を提示します。",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DSSI: 誠実な防御"
+  },
+  "permissions": [
+    "activeTab"
+  ]
+}
