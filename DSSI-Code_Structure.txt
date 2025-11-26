@@ -1,0 +1,7 @@
+DSSI-Code/
+├── apps/
+│   └── mvp-extension/  <-- Phase 1 ブラウザ拡張機能のソースコード
+├── packages/
+│   └── auditor-engine/ <-- Phase 2 AI監査エンジンなどの共有ロジック（将来）
+└── docs/
+    └── spec/           <-- Input_Guard_Map.md (技術仕様書)
