@@ -8,7 +8,8 @@
     "default_title": "DSSI: 誠実な防御"
   },
   "permissions": [
-    "activeTab"
+    "activeTab",
+    "storage"
   ],
   "content_scripts": [
     {
