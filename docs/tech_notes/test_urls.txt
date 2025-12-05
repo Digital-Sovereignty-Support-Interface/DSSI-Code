@@ -11,7 +11,10 @@ DSSIでの用途: 「HTTP警告」の動作確認
 テスト手順:
 
 http://example.com にアクセスする。
-
+//const TARGET_SELECTORS = 'input';
+//【for test】 : すべての入力欄に設定http://example.com/　にてallow pastingを行い、
+//　document.body.innerHTML += '<input type="password" placeholder="DSSI Test Field" style="display:block; margin:20px auto; padding:10px; border:1px solid #ccc;">';
+//　として、架空のパスワードフィールドを追加して動作確認可能
 DSSIが「⚠️ 通信経路が暗号化されていません」というチップスを出すか確認する。
 
 安心ポイント: RFC 2606で予約されているため、将来誰かに買収されて変なサイトになるリスクがゼロです。
