@@ -1,36 +1,82 @@
 /**
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドを検知し、技術的事実（チップス）を提示する。
- * 機能: HTTP/HTTPSのプロトコル判定、バックグラウンド経由の証明書模擬判定、ON/OFF制御。
+ * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御。
  * 哲学: "Facts over Fear." (恐怖ではなく事実を)
  */
 
 console.log("🛡️ DSSI Guard: Loaded.");
 
-const TARGET_SELECTORS = 'input[type="password"]';
+// 監視対象の拡大 (Email, Credit Cardを追加)
+const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
 let guardInterval = null;
 
 // ---------------------------------------------
-// Helper: チップスの描画とイベント設定
+// Logic: フィールドごとの定義 (Definitions)
+// ---------------------------------------------
+function getFieldConfig(field) {
+    const type = field.type;
+    const name = (field.name || field.id || "").toLowerCase();
+
+    // A. パスワードフィールド
+    if (type === "password") {
+        return {
+            title: "ℹ️ 技術情報: キー入力イベント",
+            borderColor: "#e67e22", // オレンジ
+            fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
+            purpose: "【目的】 この技術は通常、利便性（入力補助など）のために使われます。",
+            risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
+            rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
+        };
+    }
+    
+    // B. クレジットカードフィールド (簡易判定)
+    if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
+        return {
+            title: "💳 技術情報: 決済情報の入力",
+            borderColor: "#e67e22", // オレンジ
+            fact: "【確認】 財務資産に直結する情報の入力欄です。",
+            purpose: "【目的】 サービスや商品の購入決済に使用されます。",
+            risk: "【リスク】 通信経路や保存方法に不備がある場合、資産の不正利用に直結します。",
+            rec: "ブラウザのアドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
+        };
+    }
+
+    // C. メールアドレスフィールド
+    if (type === "email") {
+        return {
+            title: "📧 技術情報: 連絡先情報の入力",
+            borderColor: "#3498db", // 青 (注意レベル低)
+            fact: "【確認】 個人を特定、追跡可能なID（メールアドレス）の入力欄です。",
+            purpose: "【目的】 連絡、認証、およびユーザーのトラッキング（追跡）に使用されます。",
+            risk: "【リスク】 フィッシングサイトの場合、入力した時点でリスト化される可能性があります。",
+            rec: "このサイトのドメイン（URL）が、意図した相手のものであるか確認してください。"
+        };
+    }
+
+    // デフォルト（該当なし）
+    return null;
+}
+
+// ---------------------------------------------
+// Helper: チップスの描画
 // ---------------------------------------------
 function renderChip(field, data) {
-    // 1. 視覚的マーキング (枠線の適用)
+    // 枠線の適用
     field.style.border = `2px solid ${data.borderColor}`;
     field.classList.add("dssi-observed-field");
 
-    // 2. チップスの生成
+    // チップスの生成
     const chip = document.createElement("div");
     chip.className = "dssi-chip";
     
-    // 危険度が高い場合、チップスの左線を強調
-    if (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") {
-        chip.style.borderLeft = `4px solid ${data.borderColor}`;
-    } else {
-        chip.style.borderLeft = `4px solid ${data.borderColor}`;
-    }
+    // 危険度に応じた左線の色
+    const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") 
+                            ? data.borderColor : data.borderColor;
+    chip.style.borderLeft = `4px solid ${leftBorderColor}`;
 
     chip.innerHTML = `
-        <span class="dssi-chip-title" style="color:${data.borderColor === '#e67e22' ? '#f1c40f' : '#e74c3c'}">${data.title}</span>
+        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : '#e74c3c')}">${data.title}</span>
         ${data.fact}<br>
         ${data.purpose}<br>
         ${data.risk}<br>
@@ -38,90 +84,71 @@ function renderChip(field, data) {
     `;
     document.body.appendChild(chip);
 
-    // 3. 表示・非表示の制御ロジック
+    // 表示制御
     const showChip = () => {
         const rect = field.getBoundingClientRect();
         const scrollY = window.scrollY || window.pageYOffset;
         const scrollX = window.scrollX || window.pageXOffset;
-
-        // フィールドの真上に表示
         chip.style.top = `${rect.top + scrollY - chip.offsetHeight - 10}px`;
         chip.style.left = `${rect.left + scrollX}px`;
         chip.classList.add("dssi-visible");
     };
-
     const hideChip = () => {
         chip.classList.remove("dssi-visible");
     };
 
-    // イベントリスナーの登録
     field.addEventListener("focus", showChip);
     field.addEventListener("mouseenter", showChip);
     field.addEventListener("blur", hideChip);
     field.addEventListener("mouseleave", hideChip);
 
-    // 削除時のために参照を保持（簡易実装）
     field.dssiChipElement = chip;
 }
 
 // ---------------------------------------------
-// Core Logic: フィールドごとの事実抽出プロセス
+// Core Logic: 処理の実行
 // ---------------------------------------------
 async function processField(field) {
-    // 既に処理済みならスキップ（二重表示防止）
     if (field.dataset.dssiBound) return;
-    field.dataset.dssiBound = "true";
+    
+    // 1. フィールドタイプに応じた基本データを取得
+    let chipData = getFieldConfig(field);
+    if (!chipData) return; // 対象外なら何もしない
 
+    field.dataset.dssiBound = "true";
     const protocol = window.location.protocol;
 
-    // デフォルトのデータ（標準HTTPS）
-    let chipData = {
-        title: "ℹ️ 技術情報: キー入力イベント",
-        borderColor: "#e67e22", // オレンジ (注意)
-        fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
-        purpose: "【目的】 この技術は通常、利便性（入力補助など）のために使われます。",
-        risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
-        rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
-    };
-
-    // 1. HTTP判定 (非暗号化)
+    // 2. HTTP判定 (全フィールド共通のリスク上書き)
     if (protocol === 'http:') {
         chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
-        chipData.borderColor = "#e74c3c"; // 赤 (危険)
+        chipData.borderColor = "#e74c3c"; // 赤
         chipData.fact = "【事実】 このページの通信経路は暗号化されていません。";
         chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
-        chipData.risk = "【リスク】 同じネットワーク利用者や経路上の第三者が、内容を傍受・改ざん可能です。";
+        chipData.risk = "【リスク】 経路上の第三者が、入力内容（" + field.type + "）を傍受可能です。";
         chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
         
-        // HTTPなら即描画
         renderChip(field, chipData);
     
     } else if (protocol === 'https:') {
-        // 2. HTTPS詳細判定 (バックグラウンドへ問い合わせ)
-        // ※ Chrome API制限のため、background.js 経由で模擬判定を行う
+        // 3. HTTPS詳細判定 (バックグラウンド問い合わせ)
         try {
             chrome.runtime.sendMessage({
                 type: "CHECK_CERTIFICATE",
                 url: window.location.href
             }, (response) => {
-                // エラーハンドリング（拡張機能が無効化された場合など）
                 if (chrome.runtime.lastError) return;
 
-                // 期限切れ等の異常があればデータを上書き
                 if (response && response.status === "expired") {
                     chipData.title = "🚫 技術情報: 証明書期限切れ";
-                    chipData.borderColor = "#c0392b"; // 濃い赤 (致命的)
-                    chipData.fact = `【事実】 このサイトのセキュリティ証明書は期限が切れています。<br>(期限: ${response.expiry})`;
-                    chipData.purpose = "【状況】 管理不備、あるいは攻撃者による偽サイトの可能性があります。";
-                    chipData.risk = "【リスク】 暗号化が機能していないか、通信先が正当な相手ではありません。";
+                    chipData.borderColor = "#c0392b"; // 濃い赤
+                    chipData.fact = `【事実】 証明書の期限が切れています (期限: ${response.expiry})。`;
+                    chipData.purpose = "【状況】 管理不備、あるいは偽サイトの可能性があります。";
+                    chipData.risk = "【リスク】 暗号化が機能していない可能性があります。";
                     chipData.rec = "直ちに利用を中止してください。";
                 }
-                
-                // 判定完了後に描画
                 renderChip(field, chipData);
             });
         } catch (e) {
-            // 通信エラー時はデフォルト（標準HTTPS）として描画
             renderChip(field, chipData);
         }
     }
@@ -133,49 +160,31 @@ function attachChips() {
 }
 
 // ---------------------------------------------
-// Control Logic: 起動と停止 (Kill Switch対応)
+// Control Logic & Entry Point (変更なし)
 // ---------------------------------------------
-
 function startGuard() {
-    if (guardInterval) return; // 既に動いていれば何もしない
+    if (guardInterval) return;
     console.log("🛡️ DSSI Guard: Enabled.");
-    
     attachChips();
-    // 動的な変更を監視
     guardInterval = setInterval(attachChips, 2000);
 }
 
 function stopGuard() {
-    // 動作していないなら何もしない
     if (!guardInterval && !document.querySelector('.dssi-observed-field')) return;
-    
     console.log("🛡️ DSSI Guard: Disabled.");
-
-    // 1. 監視の停止
     if (guardInterval) {
         clearInterval(guardInterval);
         guardInterval = null;
     }
-
-    // 2. 物理的撤去（チップスと赤枠を消す）
-    // 生成したチップス要素を削除
     document.querySelectorAll('.dssi-chip').forEach(el => el.remove());
-    
-    // 入力欄の状態をリセット
     document.querySelectorAll('.dssi-observed-field').forEach(field => {
-        field.style.border = ""; // 枠線スタイルを削除
+        field.style.border = "";
         field.classList.remove("dssi-observed-field");
         delete field.dataset.dssiBound;
     });
 }
 
-// ---------------------------------------------
-// Entry Point: 設定読み込みとメッセージ受信
-// ---------------------------------------------
-
-// A. 起動時の設定確認
 chrome.storage.local.get(['dssiEnabled'], (result) => {
-    // デフォルトは true (undefinedのときもtrue扱い)
     if (result.dssiEnabled !== false) {
         startGuard();
     } else {
@@ -183,7 +192,6 @@ chrome.storage.local.get(['dssiEnabled'], (result) => {
     }
 });
 
-// B. ポップアップからの指令受信
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "TOGGLE_GUARD") {
         if (request.enabled) {
