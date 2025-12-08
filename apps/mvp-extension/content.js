@@ -1,18 +1,19 @@
 /**
  * DSSI Content Script (Observer & Guide)
- * 責務: 入力フィールドを検知し、技術的事実（チップス）を提示する。
+ * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
- * 拡張: 色分けの変更、タイムスタンプ付きストレージ管理。
+ * 拡張: 枠線の永続化（ミュート時も表示）、メール検知強化。
  * 哲学: "Facts over Fear."
  */
 
 console.log("🛡️ DSSI Guard: Loaded.");
 
-const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
+// 監視対象の拡大 (name/idにemailを含むものも対象に)
+const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
 let guardInterval = null;
 
 // ---------------------------------------------
-// Logic: ストレージ操作 (Timestamp対応)
+// Logic: ストレージ操作
 // ---------------------------------------------
 const STORAGE_KEY_STATS = 'dssi_stats';
 
@@ -36,7 +37,6 @@ async function updateChipStats(chipId, changes) {
             if (changes.increment) current.count++;
             if (changes.mute !== undefined) {
                 current.muted = changes.mute;
-                // ミュートした時刻を記録（将来の期間リセット用）
                 if (changes.mute) current.lastMutedAt = Date.now(); 
             }
             
@@ -47,13 +47,13 @@ async function updateChipStats(chipId, changes) {
 }
 
 // ---------------------------------------------
-// Logic: フィールド定義 (配色変更)
+// Logic: フィールド定義
 // ---------------------------------------------
 function getFieldConfig(field) {
-    const type = field.type;
+    const type = (field.type || "").toLowerCase();
     const name = (field.name || field.id || "").toLowerCase();
 
-    // A. パスワード (オレンジ: 注意)
+    // A. パスワード
     if (type === "password") {
         return {
             id: "guide_password",
@@ -66,7 +66,7 @@ function getFieldConfig(field) {
         };
     }
     
-    // B. クレジットカード (赤: 重要資産)
+    // B. クレジットカード
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
             id: "guide_credit_card",
@@ -79,8 +79,8 @@ function getFieldConfig(field) {
         };
     }
 
-    // C. メールアドレス/ID (緑: 識別情報)
-    if (type === "email" || name.includes("user") || name.includes("login")) {
+    // C. メールアドレス/ID (拡張検知)
+    if (type === "email" || name.includes("email") || name.includes("mail") || name.includes("user") || name.includes("login")) {
         return {
             id: "guide_email",
             title: "📧 技術情報: 連絡先情報の入力",
@@ -116,7 +116,7 @@ function showSubmissionToast(message) {
 }
 
 // ---------------------------------------------
-// Helper: 全チップスの消去 (排他制御)
+// Helper: 全チップスの消去
 // ---------------------------------------------
 function hideAllChips() {
     document.querySelectorAll('.dssi-chip').forEach(chip => {
@@ -136,16 +136,22 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         if (existingBlocker) existingBlocker.remove();
     }
 
-    // HTTP警告などの「特に危険」な場合はクラスを追加
-    if (data.borderColor === "#e74c3c" && !data.id) { // IDがない＝汎用警告（HTTP等）
+    // 1. 枠線の適用 (ここは常に行う)
+    // 危険度が高い場合(HTTP等)は点滅スタイルを追加
+    if (data.borderColor === "#e74c3c" && !data.id) { 
         field.classList.add("dssi-danger-field");
     }
-
     if (!isBlocker) {
         field.style.border = `2px solid ${data.borderColor}`;
         field.classList.add("dssi-observed-field");
     }
 
+    // ★重要: ミュート済みならチップス生成をスキップ (枠線だけ残して終了)
+    if (stats && stats.muted) {
+        return;
+    }
+
+    // 2. チップスの生成 (ミュートされていない場合のみ)
     const chip = document.createElement("div");
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
@@ -207,7 +213,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
             e.preventDefault(); chip.remove();
             if (blockerCallback) blockerCallback(false);
         });
-
+        
         const outsideClickListener = (e) => {
             if (!chip.contains(e.target) && e.target !== field) {
                 chip.remove();
@@ -236,7 +242,8 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
                 e.stopPropagation();
                 updateChipStats(data.id, { mute: true });
                 chip.remove();
-                field.style.border = "";
+                // ★重要変更: ミュート時は枠線（style.border）は消さない！
+                console.log(`DSSI: Muted chip for ${data.id}, but border remains.`);
             });
         }
 
@@ -258,7 +265,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
 }
 
 // ---------------------------------------------
-// Logic: フィールド処理 (HTTP警告などの上書きロジック)
+// Logic: フィールド処理
 // ---------------------------------------------
 async function processField(field) {
     if (field.dataset.dssiBound) return;
@@ -266,25 +273,35 @@ async function processField(field) {
     let chipData = getFieldConfig(field);
     if (!chipData) return;
 
+    // Stats取得とミュート状態の判定
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
-        if (stats.muted) return; // ミュート済みならスキップ
-        await updateChipStats(chipData.id, { increment: true });
-        chipData.stats = { count: stats.count + 1 };
+        
+        // ★重要変更: ミュートされていても「枠線表示」のためにrenderChipは呼ぶ。
+        // renderChip側で「mutedならチップスは作らない」という制御を行う。
+        // ただし、カウントアップはミュート時は停止する（静かにしておく）のがマナーか？
+        // → ここでは「表示回数＝チップスを見た回数」として、ミュート時はカウントしない。
+        
+        chipData.stats = { count: stats.count, muted: stats.muted };
+        
+        if (!stats.muted) {
+             await updateChipStats(chipData.id, { increment: true });
+             chipData.stats.count++;
+        }
     }
 
     field.dataset.dssiBound = "true";
     const protocol = window.location.protocol;
 
     if (protocol === 'http:') {
-        // HTTP警告は常に赤色で上書き（ミュート不可）
+        // HTTP警告（最優先）
         chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
         chipData.borderColor = "#e74c3c"; // 赤
         chipData.fact = "【事実】 このページの通信経路は暗号化されていません。";
         chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
         chipData.risk = "【リスク】 経路上の第三者が、入力内容を傍受可能です。";
         chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
-        chipData.stats = null; 
+        chipData.stats = null; // HTTP警告はミュート不可
         
         renderChip(field, chipData);
     
@@ -300,8 +317,9 @@ async function processField(field) {
                     chipData.purpose = "【状況】 管理不備、あるいは偽サイトの可能性があります。";
                     chipData.risk = "【リスク】 暗号化が機能していない可能性があります。";
                     chipData.rec = "直ちに利用を中止してください。";
-                    chipData.stats = null;
+                    chipData.stats = null; // 期限切れはミュート不可
                 }
+                
                 renderChip(field, chipData, false, null, chipData.stats);
             });
         } catch (e) {
@@ -310,19 +328,19 @@ async function processField(field) {
     }
 }
 
+// ... (attachChips, attachSubmitGuard, startGuard, stopGuard, Entry Point は変更なし)
+// 省略せず記述が必要ですが、前回のFILE-022と同じです。
+// コード全体を作成する際は、前回のファイル末尾を結合してください。
+
 function attachChips() {
     const passwordFields = document.querySelectorAll(TARGET_SELECTORS);
     passwordFields.forEach(processField);
 }
 
-// ---------------------------------------------
-// Logic: Submit Guard
-// ---------------------------------------------
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
         const form = e.target;
         const protocol = window.location.protocol;
-        
         if (protocol === 'https:') return;
         if (form.dataset.dssiAllowed === "true") return;
 
@@ -365,9 +383,6 @@ function attachSubmitGuard() {
     }, true);
 }
 
-// ---------------------------------------------
-// Control Logic & Entry Point
-// ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;
     console.log("🛡️ DSSI Guard: Enabled.");
