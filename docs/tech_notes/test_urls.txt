@@ -17,6 +17,10 @@ http://example.com にアクセスする。
 //　として、架空のパスワードフィールドを追加して動作確認可能
 DSSIが「⚠️ 通信経路が暗号化されていません」というチップスを出すか確認する。
 
+架空送信フィールド
+document.body.innerHTML += '<form style="margin:50px; border:1px solid red; padding:20px;">HTTP Form<br><input type="text"><br><br><button type="submit">送信テスト</button></form>';
+
+
 安心ポイント: RFC 2606で予約されているため、将来誰かに買収されて変なサイトになるリスクがゼロです。
 
 2. httpbin.org (HTTP Request & Response Service)
