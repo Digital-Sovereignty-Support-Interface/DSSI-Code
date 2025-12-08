@@ -24,28 +24,13 @@
       align-items: center;
       justify-content: space-between;
     }
-    .philosophy {
-      margin-top: 15px;
-      font-size: 12px;
-      color: #7f8c8d;
-      font-style: italic;
-      background: #fff;
-      padding: 10px;
-      border-left: 3px solid #3498db;
-    }
-    
-    /* スイッチのデザイン */
     .switch {
       position: relative;
       display: inline-block;
       width: 40px;
       height: 20px;
     }
-    .switch input { 
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
+    .switch input { opacity: 0; width: 0; height: 0; }
     .slider {
       position: absolute;
       cursor: pointer;
@@ -65,14 +50,38 @@
       transition: .4s;
       border-radius: 50%;
     }
-    input:checked + .slider {
-      background-color: #27ae60;
+    input:checked + .slider { background-color: #27ae60; }
+    input:checked + .slider:before { transform: translateX(20px); }
+    
+    .settings {
+      margin-top: 15px;
+      padding-top: 10px;
+      border-top: 1px solid #e9ecef;
     }
-    input:checked + .slider:before {
-      transform: translateX(20px);
+    .btn-reset {
+      width: 100%;
+      padding: 8px;
+      font-size: 11px;
+      color: #7f8c8d;
+      background: none;
+      border: 1px solid #bdc3c7;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
     }
-    #status-text {
-      font-weight: bold;
+    .btn-reset:hover {
+      background-color: #ecf0f1;
+      color: #2c3e50;
+    }
+    
+    .philosophy {
+      margin-top: 15px;
+      font-size: 12px;
+      color: #7f8c8d;
+      font-style: italic;
+      background: #fff;
+      padding: 10px;
+      border-left: 3px solid #3498db;
     }
   </style>
 </head>
@@ -85,6 +94,10 @@
       <input type="checkbox" id="toggle-guard" checked>
       <span class="slider"></span>
     </label>
+  </div>
+  
+  <div class="settings">
+    <button id="reset-stats" class="btn-reset">↺ 非表示にしたガイドをリセット</button>
   </div>
   
   <div class="philosophy">

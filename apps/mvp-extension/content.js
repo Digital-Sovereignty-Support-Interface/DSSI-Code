@@ -1,7 +1,8 @@
 /**
  * DSSI Content Script (Observer & Guide)
- * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
+ * 責務: 入力フィールドを検知し、技術的事実（チップス）を提示する。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
+ * 拡張: 色分けの変更、タイムスタンプ付きストレージ管理。
  * 哲学: "Facts over Fear."
  */
 
@@ -11,47 +12,91 @@ const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[nam
 let guardInterval = null;
 
 // ---------------------------------------------
-// Logic: フィールド定義
+// Logic: ストレージ操作 (Timestamp対応)
+// ---------------------------------------------
+const STORAGE_KEY_STATS = 'dssi_stats';
+
+async function getChipStats(chipId) {
+    return new Promise((resolve) => {
+        if (!chrome.runtime?.id) return;
+        chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
+            const stats = result[STORAGE_KEY_STATS] || {};
+            resolve(stats[chipId] || { count: 0, muted: false, lastMutedAt: null });
+        });
+    });
+}
+
+async function updateChipStats(chipId, changes) {
+    return new Promise((resolve) => {
+        if (!chrome.runtime?.id) return;
+        chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
+            const stats = result[STORAGE_KEY_STATS] || {};
+            const current = stats[chipId] || { count: 0, muted: false, lastMutedAt: null };
+            
+            if (changes.increment) current.count++;
+            if (changes.mute !== undefined) {
+                current.muted = changes.mute;
+                // ミュートした時刻を記録（将来の期間リセット用）
+                if (changes.mute) current.lastMutedAt = Date.now(); 
+            }
+            
+            stats[chipId] = current;
+            chrome.storage.local.set({ [STORAGE_KEY_STATS]: stats }, resolve);
+        });
+    });
+}
+
+// ---------------------------------------------
+// Logic: フィールド定義 (配色変更)
 // ---------------------------------------------
 function getFieldConfig(field) {
     const type = field.type;
     const name = (field.name || field.id || "").toLowerCase();
 
+    // A. パスワード (オレンジ: 注意)
     if (type === "password") {
         return {
+            id: "guide_password",
             title: "ℹ️ 技術情報: キー入力イベント",
-            borderColor: "#e67e22",
+            borderColor: "#e67e22", // オレンジ
             fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
             purpose: "【目的】 この技術は通常、利便性（入力補助など）のために使われます。",
             risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
             rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
         };
     }
+    
+    // B. クレジットカード (赤: 重要資産)
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
+            id: "guide_credit_card",
             title: "💳 技術情報: 決済情報の入力",
-            borderColor: "#e67e22",
+            borderColor: "#e74c3c", // 赤
             fact: "【確認】 財務資産に直結する情報の入力欄です。",
             purpose: "【目的】 サービスや商品の購入決済に使用されます。",
             risk: "【リスク】 通信経路や保存方法に不備がある場合、資産の不正利用に直結します。",
             rec: "ブラウザのアドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
         };
     }
-    if (type === "email") {
+
+    // C. メールアドレス/ID (緑: 識別情報)
+    if (type === "email" || name.includes("user") || name.includes("login")) {
         return {
+            id: "guide_email",
             title: "📧 技術情報: 連絡先情報の入力",
-            borderColor: "#3498db",
+            borderColor: "#2ecc71", // 緑
             fact: "【確認】 個人を特定、追跡可能なID（メールアドレス）の入力欄です。",
             purpose: "【目的】 連絡、認証、およびユーザーのトラッキング（追跡）に使用されます。",
             risk: "【リスク】 フィッシングサイトの場合、入力した時点でリスト化される可能性があります。",
             rec: "このサイトのドメイン（URL）が、意図した相手のものであるか確認してください。"
         };
     }
+
     return null;
 }
 
 // ---------------------------------------------
-// Helper: 送信フィードバック (トースト表示)
+// Helper: 送信フィードバック
 // ---------------------------------------------
 function showSubmissionToast(message) {
     const toast = document.createElement("div");
@@ -63,7 +108,6 @@ function showSubmissionToast(message) {
     `;
     toast.innerText = message;
     document.body.appendChild(toast);
-
     requestAnimationFrame(() => { toast.style.opacity = "1"; });
     setTimeout(() => {
         toast.style.opacity = "0";
@@ -72,12 +116,30 @@ function showSubmissionToast(message) {
 }
 
 // ---------------------------------------------
+// Helper: 全チップスの消去 (排他制御)
+// ---------------------------------------------
+function hideAllChips() {
+    document.querySelectorAll('.dssi-chip').forEach(chip => {
+        if (!chip.classList.contains('dssi-blocker-chip')) {
+            chip.classList.remove("dssi-visible");
+        }
+    });
+}
+
+// ---------------------------------------------
 // Helper: チップスの描画
 // ---------------------------------------------
-function renderChip(field, data, isBlocker = false, blockerCallback = null) {
+function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
     if (field.dssiChipElement) field.dssiChipElement.remove();
-    const existingBlocker = document.querySelector('.dssi-blocker-chip');
-    if (existingBlocker) existingBlocker.remove();
+    if (isBlocker) {
+        const existingBlocker = document.querySelector('.dssi-blocker-chip');
+        if (existingBlocker) existingBlocker.remove();
+    }
+
+    // HTTP警告などの「特に危険」な場合はクラスを追加
+    if (data.borderColor === "#e74c3c" && !data.id) { // IDがない＝汎用警告（HTTP等）
+        field.classList.add("dssi-danger-field");
+    }
 
     if (!isBlocker) {
         field.style.border = `2px solid ${data.borderColor}`;
@@ -88,27 +150,36 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
-
-    // ★重要修正: ブロッカーの場合は強制的にクリックを有効化（CSSに依存しない）
-    if (isBlocker) {
+    
+    if (isBlocker || stats) {
         chip.style.pointerEvents = "auto";
     }
 
     let btnHtml = "";
+    let footerHtml = "";
+
     if (isBlocker) {
         btnHtml = `
         <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
             <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">送信をやめる</button>
             <button id="dssi-confirm-btn" style="padding:6px 12px; background:#e74c3c; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">リスクを承知で送信</button>
         </div>`;
+    } else if (stats) {
+        footerHtml = `
+        <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
+            <span>表示回数: ${stats.count}</span>
+            <button id="dssi-mute-btn" style="background:transparent; border:1px solid #7f8c8d; color:#bdc3c7; border-radius:3px; cursor:pointer; padding:2px 5px; font-size:10px;">今後表示しない</button>
+        </div>
+        `;
     }
 
     chip.innerHTML = `
-        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : '#e74c3c')}">${data.title}</span>
+        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : (leftBorderColor === '#2ecc71' ? '#2ecc71' : '#e74c3c'))}">${data.title}</span>
         ${data.fact}<br>
         ${data.purpose}<br>
         ${data.risk}<br>
         <strong>推奨:</strong> ${data.rec}
+        ${footerHtml}
         ${btnHtml}
     `;
     document.body.appendChild(chip);
@@ -124,24 +195,18 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
     if (isBlocker) {
         updatePosition();
         chip.classList.add("dssi-visible");
-
+        
         const confirmBtn = chip.querySelector("#dssi-confirm-btn");
         const cancelBtn = chip.querySelector("#dssi-cancel-btn");
-
-        if (confirmBtn) {
-            confirmBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                chip.remove();
-                if (blockerCallback) blockerCallback(true);
-            });
-        }
-        if (cancelBtn) {
-            cancelBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                chip.remove();
-                if (blockerCallback) blockerCallback(false);
-            });
-        }
+        
+        if (confirmBtn) confirmBtn.addEventListener("click", (e) => {
+            e.preventDefault(); chip.remove();
+            if (blockerCallback) blockerCallback(true);
+        });
+        if (cancelBtn) cancelBtn.addEventListener("click", (e) => {
+            e.preventDefault(); chip.remove();
+            if (blockerCallback) blockerCallback(false);
+        });
 
         const outsideClickListener = (e) => {
             if (!chip.contains(e.target) && e.target !== field) {
@@ -149,29 +214,51 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
                 document.removeEventListener("click", outsideClickListener);
             }
         };
-        setTimeout(() => {
-            document.addEventListener("click", outsideClickListener);
-        }, 100);
+        setTimeout(() => document.addEventListener("click", outsideClickListener), 100);
 
     } else {
         const showChip = () => {
+            hideAllChips();
             updatePosition();
             chip.classList.add("dssi-visible");
         };
         const hideChip = () => {
             chip.classList.remove("dssi-visible");
         };
+        
         field.addEventListener("focus", showChip);
         field.addEventListener("mouseenter", showChip);
-        field.addEventListener("blur", hideChip);
-        field.addEventListener("mouseleave", hideChip);
+        
+        const muteBtn = chip.querySelector("#dssi-mute-btn");
+        if (muteBtn) {
+            muteBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                updateChipStats(data.id, { mute: true });
+                chip.remove();
+                field.style.border = "";
+            });
+        }
+
+        let hoverTimeout;
+        const delayedHide = () => {
+            hoverTimeout = setTimeout(hideChip, 200);
+        };
+        const cancelHide = () => {
+            clearTimeout(hoverTimeout);
+        };
+
+        field.addEventListener("blur", delayedHide);
+        field.addEventListener("mouseleave", delayedHide);
+        chip.addEventListener("mouseenter", cancelHide);
+        chip.addEventListener("mouseleave", delayedHide);
     }
 
     if (!isBlocker) field.dssiChipElement = chip;
 }
 
 // ---------------------------------------------
-// Logic: フィールド処理
+// Logic: フィールド処理 (HTTP警告などの上書きロジック)
 // ---------------------------------------------
 async function processField(field) {
     if (field.dataset.dssiBound) return;
@@ -179,34 +266,46 @@ async function processField(field) {
     let chipData = getFieldConfig(field);
     if (!chipData) return;
 
+    if (chipData.id) {
+        const stats = await getChipStats(chipData.id);
+        if (stats.muted) return; // ミュート済みならスキップ
+        await updateChipStats(chipData.id, { increment: true });
+        chipData.stats = { count: stats.count + 1 };
+    }
+
     field.dataset.dssiBound = "true";
     const protocol = window.location.protocol;
 
     if (protocol === 'http:') {
+        // HTTP警告は常に赤色で上書き（ミュート不可）
         chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
-        chipData.borderColor = "#e74c3c";
+        chipData.borderColor = "#e74c3c"; // 赤
         chipData.fact = "【事実】 このページの通信経路は暗号化されていません。";
         chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
         chipData.risk = "【リスク】 経路上の第三者が、入力内容を傍受可能です。";
         chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
+        chipData.stats = null; 
+        
         renderChip(field, chipData);
     
     } else if (protocol === 'https:') {
         try {
             chrome.runtime.sendMessage({ type: "CHECK_CERTIFICATE", url: window.location.href }, (response) => {
                 if (chrome.runtime.lastError) return;
+                
                 if (response && response.status === "expired") {
                     chipData.title = "🚫 技術情報: 証明書期限切れ";
-                    chipData.borderColor = "#c0392b";
+                    chipData.borderColor = "#c0392b"; // 濃い赤
                     chipData.fact = `【事実】 証明書の期限が切れています (期限: ${response.expiry})。`;
                     chipData.purpose = "【状況】 管理不備、あるいは偽サイトの可能性があります。";
                     chipData.risk = "【リスク】 暗号化が機能していない可能性があります。";
                     chipData.rec = "直ちに利用を中止してください。";
+                    chipData.stats = null;
                 }
-                renderChip(field, chipData);
+                renderChip(field, chipData, false, null, chipData.stats);
             });
         } catch (e) {
-            renderChip(field, chipData);
+            renderChip(field, chipData, false, null, chipData.stats);
         }
     }
 }
@@ -217,7 +316,7 @@ function attachChips() {
 }
 
 // ---------------------------------------------
-// Logic: Submit Guard (送信ブロック)
+// Logic: Submit Guard
 // ---------------------------------------------
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
@@ -241,13 +340,10 @@ function attachSubmitGuard() {
                 risk: "【リスク】 送信内容は平文で流れるため、盗聴されるリスクが極めて高いです。",
                 rec: "本当に送信してよければ、「リスクを承知で送信」を押してください。"
             }, true, (isConfirmed) => {
-                // コールバック関数
                 if (isConfirmed) {
                     const inputVal = form.querySelector("input")?.value || "(入力なし)";
                     const displayVal = inputVal.length > 20 ? inputVal.substring(0, 20) + "..." : inputVal;
-                    
                     showSubmissionToast(`✅ 送信を受け付けました。\n内容: ${displayVal}`);
-
                     setTimeout(() => {
                         form.dataset.dssiAllowed = "true";
                         if (form.requestSubmit) {
@@ -270,7 +366,7 @@ function attachSubmitGuard() {
 }
 
 // ---------------------------------------------
-// Control Logic
+// Control Logic & Entry Point
 // ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;

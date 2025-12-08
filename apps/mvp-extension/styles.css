@@ -1,10 +1,28 @@
 /* DSSI Honest Defense Chips Style */
 
-/* 監視対象フィールドのハイライト */
+/* 監視対象フィールドの基本スタイル */
 .dssi-observed-field {
-  border: 2px solid #e67e22 !important; /* 警告色（オレンジ） */
+  /* !important を削除。JS側の指定(赤/緑/橙)を優先させる */
+  border-width: 2px;
+  border-style: solid;
+  /* border-color は JSで制御するためここでは指定しない、またはフォールバックのみ */
+  border-color: #e67e22; 
+  
   box-shadow: 0 0 5px rgba(230, 126, 34, 0.5);
   transition: all 0.3s ease;
+}
+
+/* ★追加: 危険フィールド（HTTPなど）用の強調スタイル */
+.dssi-observed-field[style*="rgb(231, 76, 60)"], /* 赤色(#e74c3c)の場合 */
+.dssi-observed-field[style*="#e74c3c"] {
+  box-shadow: 0 0 8px rgba(231, 76, 60, 0.8) !important;
+  animation: dssi-pulse 2s infinite;
+}
+
+@keyframes dssi-pulse {
+  0% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); }
+  50% { box-shadow: 0 0 15px rgba(231, 76, 60, 0.8); }
+  100% { box-shadow: 0 0 5px rgba(231, 76, 60, 0.5); }
 }
 
 /* チップス本体 */
@@ -20,15 +38,13 @@
   line-height: 1.4;
   box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   max-width: 300px;
-  border-left: 4px solid #e67e22;
+  /* 左線の色はJSで制御 */
   
-  /* アニメーション */
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.3s, transform 0.3s;
   
-  /* ★重要: 通常はクリックを透過する（下の入力欄を邪魔しない） */
-  pointer-events: none; 
+  pointer-events: none; /* 通常はクリック透過 */
 }
 
 .dssi-chip.dssi-visible {
@@ -43,9 +59,9 @@
   color: #f1c40f;
 }
 
-/* ★追加: ブロッカー用（操作が必要なのでクリックを有効化） */
+/* ブロッカー用（クリック有効化） */
 .dssi-blocker-chip {
   pointer-events: auto !important;
-  background-color: #34495e; /* 少し重厚に */
-  box-shadow: 0 10px 20px rgba(0,0,0,0.5); /* 影を強く */
+  background-color: #34495e;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.5);
 }
