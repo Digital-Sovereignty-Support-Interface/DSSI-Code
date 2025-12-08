@@ -126,7 +126,16 @@ async function processField(field) {
         chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
         chipData.risk = "【リスク】 経路上の第三者が、入力内容（" + field.type + "）を傍受可能です。";
         chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
-        
+    
+        // ▼ 追加: フォーム内の送信ボタンを探して無効化する
+        if (field.form) {
+            const submitBtn = field.form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.title = "非暗号化通信のため送信できません"; // ホバー時のヒント
+            }
+        }
+
         renderChip(field, chipData);
     
     } else if (protocol === 'https:') {
