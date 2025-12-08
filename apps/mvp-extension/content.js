@@ -2,7 +2,7 @@
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
- * 拡張: 枠線の永続化、シンプルで堅牢なホバー挙動（Simple Hover）。
+ * 拡張: 状態ベース制御 (State-Based Control) による挙動安定化。
  * 哲学: "Facts over Fear."
  */
 
@@ -52,7 +52,6 @@ function getFieldConfig(field) {
     const type = (field.type || "").toLowerCase();
     const name = (field.name || field.id || "").toLowerCase();
 
-    // A. パスワード
     if (type === "password") {
         return {
             id: "guide_password",
@@ -64,8 +63,6 @@ function getFieldConfig(field) {
             rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
         };
     }
-    
-    // B. クレジットカード
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
             id: "guide_credit_card",
@@ -77,8 +74,6 @@ function getFieldConfig(field) {
             rec: "ブラウザのアドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
         };
     }
-
-    // C. メールアドレス/ID
     if (type === "email" || name.includes("email") || name.includes("mail") || name.includes("user") || name.includes("login") || name.includes("account")) {
         return {
             id: "guide_email",
@@ -90,7 +85,6 @@ function getFieldConfig(field) {
             rec: "このサイトのドメイン（URL）が、意図した相手のものであるか確認してください。"
         };
     }
-
     return null;
 }
 
@@ -115,13 +109,25 @@ function showSubmissionToast(message) {
 }
 
 // ---------------------------------------------
+// Helper: 全チップスの物理消去（透明な壁対策）
+// ---------------------------------------------
+function hideAllChips() {
+    document.querySelectorAll('.dssi-chip').forEach(chip => {
+        if (!chip.classList.contains('dssi-blocker-chip')) {
+            chip.style.display = 'none'; // ★重要: 完全に見えなくする（クリック判定も消える）
+            chip.classList.remove("dssi-visible");
+        }
+    });
+}
+
+// ---------------------------------------------
 // Helper: チップスの描画
 // ---------------------------------------------
 function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
-    // 既存チップス削除
+    // 古いチップスがあれば破棄（参照切れ対策）
     if (field.dssiChipElement) {
         field.dssiChipElement.remove();
-        field.dssiChipElement = null; // 参照も切る
+        field.dssiChipElement = null;
     }
     if (isBlocker) {
         const existingBlocker = document.querySelector('.dssi-blocker-chip');
@@ -143,6 +149,10 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
     
+    // 初期状態は非表示（物理的に隠す）
+    if (!isBlocker) chip.style.display = 'none';
+    
+    // 操作性: ボタンがあるならクリック有効
     chip.style.pointerEvents = "auto";
 
     let btnHtml = "";
@@ -187,7 +197,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     if (isBlocker) {
         updatePosition();
         chip.classList.add("dssi-visible");
-        
+        // (ブロッカーのイベント設定は省略 - 前回と同じ)
         const confirmBtn = chip.querySelector("#dssi-confirm-btn");
         const cancelBtn = chip.querySelector("#dssi-cancel-btn");
         
@@ -199,7 +209,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
             e.preventDefault(); chip.remove();
             if (blockerCallback) blockerCallback(false);
         });
-        
+
         const outsideClickListener = (e) => {
             if (!chip.contains(e.target) && e.target !== field) {
                 chip.remove();
@@ -209,41 +219,56 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         setTimeout(() => document.addEventListener("click", outsideClickListener), 100);
 
     } else {
-        // ★通常チップスの挙動（Focus優先ロジック）
-        let hoverTimeout;
+        // ★ 状態管理ロジック (State Manager)
+        let isFieldHovered = false;
+        let isChipHovered = false;
+        let isFocused = false;
+        let hideTimeout;
 
-        const showChip = () => {
-            if (hoverTimeout) clearTimeout(hoverTimeout);
-            updatePosition();
-            chip.classList.add("dssi-visible");
+        const checkStateAndRender = () => {
+            // 表示条件: フォーカス中 OR フィールドにマウス OR チップスにマウス
+            const shouldShow = isFocused || isFieldHovered || isChipHovered;
+
+            if (shouldShow) {
+                if (hideTimeout) clearTimeout(hideTimeout);
+                
+                // 他のチップスを隠す（排他）
+                hideAllChips();
+                
+                // 表示処理
+                chip.style.display = 'block'; // 物理的出現
+                updatePosition();
+                
+                // アニメーション用（display:block直後だとtransitionが効かないため微遅延）
+                requestAnimationFrame(() => {
+                    chip.classList.add("dssi-visible");
+                });
+            } else {
+                // 非表示処理（猶予付き）
+                if (hideTimeout) clearTimeout(hideTimeout);
+                hideTimeout = setTimeout(() => {
+                    if (!isFocused && !isFieldHovered && !isChipHovered) {
+                        chip.classList.remove("dssi-visible");
+                        // アニメーション後に物理削除
+                        setTimeout(() => {
+                            if (!chip.classList.contains("dssi-visible")) {
+                                chip.style.display = 'none'; // 透明な壁を消す
+                            }
+                        }, 300);
+                    }
+                }, 200); // 0.2秒の猶予
+            }
         };
 
-        const hideChip = (event) => {
-            // 0.3秒の猶予（チップス移動用）
-            hoverTimeout = setTimeout(() => {
-                // ★修正: 入力中（フォーカスあり）なら、マウスが外れても消さない。
-                // ただし、イベントが 'blur'（入力終了）なら確実に消す。
-                if (document.activeElement === field && event?.type !== 'blur') {
-                    return;
-                }
-                chip.classList.remove("dssi-visible");
-            }, 300);
-        };
+        // イベントリスナー: 状態（フラグ）を更新して判定関数を呼ぶだけ
+        field.addEventListener("focus", () => { isFocused = true; checkStateAndRender(); });
+        field.addEventListener("blur", () => { isFocused = false; checkStateAndRender(); });
         
-        const keepChip = () => {
-            if (hoverTimeout) clearTimeout(hoverTimeout);
-        };
-
-        // イベントリスナー
-        field.addEventListener("focus", showChip);
-        field.addEventListener("mouseenter", showChip);
+        field.addEventListener("mouseenter", () => { isFieldHovered = true; checkStateAndRender(); });
+        field.addEventListener("mouseleave", () => { isFieldHovered = false; checkStateAndRender(); });
         
-        // hideChipにイベントオブジェクトを渡すように変更
-        field.addEventListener("blur", hideChip);
-        field.addEventListener("mouseleave", hideChip);
-        
-        chip.addEventListener("mouseenter", keepChip);
-        chip.addEventListener("mouseleave", hideChip);
+        chip.addEventListener("mouseenter", () => { isChipHovered = true; checkStateAndRender(); });
+        chip.addEventListener("mouseleave", () => { isChipHovered = false; checkStateAndRender(); });
 
         // ミュートボタン
         const muteBtn = chip.querySelector("#dssi-mute-btn");
@@ -260,9 +285,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     if (!isBlocker) field.dssiChipElement = chip;
 }
 
-// ---------------------------------------------
-// Logic: フィールド処理 (変更なし)
-// ---------------------------------------------
+// ... (processField以降は変更なし)
 async function processField(field) {
     if (field.dataset.dssiBound) return;
     let chipData = getFieldConfig(field);
@@ -271,8 +294,6 @@ async function processField(field) {
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
         if (stats.muted) {
-            // ミュート時は生成スキップ、ただし枠線はrenderChipに任せずここでつける手もあるが
-            // 設計上renderChipに任せる（renderChip内でmutedなら帰る）
         } else {
             await updateChipStats(chipData.id, { increment: true });
             chipData.stats = { count: stats.count + 1 };
@@ -318,9 +339,6 @@ function attachChips() {
     passwordFields.forEach(processField);
 }
 
-// ---------------------------------------------
-// Logic: Submit Guard (変更なし)
-// ---------------------------------------------
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
         const form = e.target;
@@ -367,9 +385,6 @@ function attachSubmitGuard() {
     }, true);
 }
 
-// ---------------------------------------------
-// Control Logic & Entry Point (変更なし)
-// ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;
     console.log("🛡️ DSSI Guard: Enabled.");
