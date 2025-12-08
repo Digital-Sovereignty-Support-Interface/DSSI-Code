@@ -2,6 +2,7 @@
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
+ * 拡張: 表示回数カウンター、個別ミュート、排他表示制御 (Singleton)。
  * 哲学: "Facts over Fear."
  */
 
@@ -9,6 +10,35 @@ console.log("🛡️ DSSI Guard: Loaded.");
 
 const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
 let guardInterval = null;
+
+// ---------------------------------------------
+// Logic: ストレージ操作 (Stats & Mute)
+// ---------------------------------------------
+const STORAGE_KEY_STATS = 'dssi_stats';
+
+async function getChipStats(chipId) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
+            const stats = result[STORAGE_KEY_STATS] || {};
+            resolve(stats[chipId] || { count: 0, muted: false });
+        });
+    });
+}
+
+async function updateChipStats(chipId, changes) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
+            const stats = result[STORAGE_KEY_STATS] || {};
+            const current = stats[chipId] || { count: 0, muted: false };
+            
+            if (changes.increment) current.count++;
+            if (changes.mute !== undefined) current.muted = changes.mute;
+            
+            stats[chipId] = current;
+            chrome.storage.local.set({ [STORAGE_KEY_STATS]: stats }, resolve);
+        });
+    });
+}
 
 // ---------------------------------------------
 // Logic: フィールド定義
@@ -19,6 +49,7 @@ function getFieldConfig(field) {
 
     if (type === "password") {
         return {
+            id: "guide_password",
             title: "ℹ️ 技術情報: キー入力イベント",
             borderColor: "#e67e22",
             fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
@@ -29,6 +60,7 @@ function getFieldConfig(field) {
     }
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
+            id: "guide_credit_card",
             title: "💳 技術情報: 決済情報の入力",
             borderColor: "#e67e22",
             fact: "【確認】 財務資産に直結する情報の入力欄です。",
@@ -39,6 +71,7 @@ function getFieldConfig(field) {
     }
     if (type === "email") {
         return {
+            id: "guide_email",
             title: "📧 技術情報: 連絡先情報の入力",
             borderColor: "#3498db",
             fact: "【確認】 個人を特定、追跡可能なID（メールアドレス）の入力欄です。",
@@ -51,7 +84,7 @@ function getFieldConfig(field) {
 }
 
 // ---------------------------------------------
-// Helper: 送信フィードバック (トースト表示)
+// Helper: 送信フィードバック
 // ---------------------------------------------
 function showSubmissionToast(message) {
     const toast = document.createElement("div");
@@ -63,7 +96,6 @@ function showSubmissionToast(message) {
     `;
     toast.innerText = message;
     document.body.appendChild(toast);
-
     requestAnimationFrame(() => { toast.style.opacity = "1"; });
     setTimeout(() => {
         toast.style.opacity = "0";
@@ -72,12 +104,31 @@ function showSubmissionToast(message) {
 }
 
 // ---------------------------------------------
+// Helper: 全チップスの消去 (排他制御)
+// ---------------------------------------------
+function hideAllChips() {
+    document.querySelectorAll('.dssi-chip').forEach(chip => {
+        // ブロッカー（送信阻止）以外は消す
+        if (!chip.classList.contains('dssi-blocker-chip')) {
+            chip.classList.remove("dssi-visible");
+            // 少し待ってDOMからも消す（アニメーション用）
+            // setTimeout(() => chip.remove(), 300); 
+            // ※DOMを消すと再表示が面倒なので、class操作のみにする
+        }
+    });
+}
+
+// ---------------------------------------------
 // Helper: チップスの描画
 // ---------------------------------------------
-function renderChip(field, data, isBlocker = false, blockerCallback = null) {
+function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
     if (field.dssiChipElement) field.dssiChipElement.remove();
-    const existingBlocker = document.querySelector('.dssi-blocker-chip');
-    if (existingBlocker) existingBlocker.remove();
+    
+    // ブロッカーの場合は既存のブロッカーも消す
+    if (isBlocker) {
+        const existingBlocker = document.querySelector('.dssi-blocker-chip');
+        if (existingBlocker) existingBlocker.remove();
+    }
 
     if (!isBlocker) {
         field.style.border = `2px solid ${data.borderColor}`;
@@ -88,19 +139,28 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
-
-    // ★重要修正: ブロッカーの場合は強制的にクリックを有効化（CSSに依存しない）
-    if (isBlocker) {
+    
+    // 操作性: ブロッカーまたはミュートボタンがある場合はクリック有効
+    if (isBlocker || stats) {
         chip.style.pointerEvents = "auto";
     }
 
     let btnHtml = "";
+    let footerHtml = "";
+
     if (isBlocker) {
         btnHtml = `
         <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
             <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">送信をやめる</button>
             <button id="dssi-confirm-btn" style="padding:6px 12px; background:#e74c3c; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">リスクを承知で送信</button>
         </div>`;
+    } else if (stats) {
+        footerHtml = `
+        <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
+            <span>表示回数: ${stats.count}</span>
+            <button id="dssi-mute-btn" style="background:transparent; border:1px solid #7f8c8d; color:#bdc3c7; border-radius:3px; cursor:pointer; padding:2px 5px; font-size:10px;">今後表示しない</button>
+        </div>
+        `;
     }
 
     chip.innerHTML = `
@@ -109,6 +169,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
         ${data.purpose}<br>
         ${data.risk}<br>
         <strong>推奨:</strong> ${data.rec}
+        ${footerHtml}
         ${btnHtml}
     `;
     document.body.appendChild(chip);
@@ -124,60 +185,83 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
     if (isBlocker) {
         updatePosition();
         chip.classList.add("dssi-visible");
-
+        
         const confirmBtn = chip.querySelector("#dssi-confirm-btn");
         const cancelBtn = chip.querySelector("#dssi-cancel-btn");
-
-        if (confirmBtn) {
-            confirmBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                chip.remove();
-                if (blockerCallback) blockerCallback(true);
-            });
-        }
-        if (cancelBtn) {
-            cancelBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                chip.remove();
-                if (blockerCallback) blockerCallback(false);
-            });
-        }
-
-        const outsideClickListener = (e) => {
-            if (!chip.contains(e.target) && e.target !== field) {
-                chip.remove();
-                document.removeEventListener("click", outsideClickListener);
-            }
-        };
-        setTimeout(() => {
-            document.addEventListener("click", outsideClickListener);
-        }, 100);
+        
+        if (confirmBtn) confirmBtn.addEventListener("click", (e) => {
+            e.preventDefault(); chip.remove();
+            if (blockerCallback) blockerCallback(true);
+        });
+        if (cancelBtn) cancelBtn.addEventListener("click", (e) => {
+            e.preventDefault(); chip.remove();
+            if (blockerCallback) blockerCallback(false);
+        });
+        // (クリックアウト処理は省略)
 
     } else {
         const showChip = () => {
+            // ★重要: 他のチップスを消してから自分を出す
+            hideAllChips();
             updatePosition();
             chip.classList.add("dssi-visible");
         };
         const hideChip = () => {
             chip.classList.remove("dssi-visible");
         };
+        
         field.addEventListener("focus", showChip);
         field.addEventListener("mouseenter", showChip);
-        field.addEventListener("blur", hideChip);
-        field.addEventListener("mouseleave", hideChip);
+        
+        // ミュートボタン
+        const muteBtn = chip.querySelector("#dssi-mute-btn");
+        if (muteBtn) {
+            muteBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                updateChipStats(data.id, { mute: true });
+                chip.remove();
+                field.style.border = "";
+            });
+        }
+
+        let hoverTimeout;
+        const delayedHide = () => {
+            hoverTimeout = setTimeout(hideChip, 200); // 少し余裕を持たせる
+        };
+        const cancelHide = () => {
+            clearTimeout(hoverTimeout);
+        };
+
+        field.addEventListener("blur", delayedHide);
+        field.addEventListener("mouseleave", delayedHide);
+        chip.addEventListener("mouseenter", cancelHide);
+        chip.addEventListener("mouseleave", delayedHide);
     }
 
     if (!isBlocker) field.dssiChipElement = chip;
 }
 
 // ---------------------------------------------
-// Logic: フィールド処理
+// Logic: フィールド処理 & その他 (変更なし)
 // ---------------------------------------------
+// ※ processField, attachChips, SubmitGuard, Control Logic は前回の内容と同じです。
+// 省略せずに記述してください。
+// 前回の FILE-024 の後半部分をそのまま利用します。
+// ---------------------------------------------
+
 async function processField(field) {
     if (field.dataset.dssiBound) return;
     
     let chipData = getFieldConfig(field);
     if (!chipData) return;
+
+    if (chipData.id) {
+        const stats = await getChipStats(chipData.id);
+        if (stats.muted) return; // ミュート済みならスキップ
+        await updateChipStats(chipData.id, { increment: true });
+        chipData.stats = { count: stats.count + 1 };
+    }
 
     field.dataset.dssiBound = "true";
     const protocol = window.location.protocol;
@@ -189,12 +273,14 @@ async function processField(field) {
         chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
         chipData.risk = "【リスク】 経路上の第三者が、入力内容を傍受可能です。";
         chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
+        chipData.stats = null; 
         renderChip(field, chipData);
     
     } else if (protocol === 'https:') {
         try {
             chrome.runtime.sendMessage({ type: "CHECK_CERTIFICATE", url: window.location.href }, (response) => {
                 if (chrome.runtime.lastError) return;
+                
                 if (response && response.status === "expired") {
                     chipData.title = "🚫 技術情報: 証明書期限切れ";
                     chipData.borderColor = "#c0392b";
@@ -202,11 +288,12 @@ async function processField(field) {
                     chipData.purpose = "【状況】 管理不備、あるいは偽サイトの可能性があります。";
                     chipData.risk = "【リスク】 暗号化が機能していない可能性があります。";
                     chipData.rec = "直ちに利用を中止してください。";
+                    chipData.stats = null;
                 }
-                renderChip(field, chipData);
+                renderChip(field, chipData, false, null, chipData.stats);
             });
         } catch (e) {
-            renderChip(field, chipData);
+            renderChip(field, chipData, false, null, chipData.stats);
         }
     }
 }
@@ -216,14 +303,10 @@ function attachChips() {
     passwordFields.forEach(processField);
 }
 
-// ---------------------------------------------
-// Logic: Submit Guard (送信ブロック)
-// ---------------------------------------------
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
         const form = e.target;
         const protocol = window.location.protocol;
-        
         if (protocol === 'https:') return;
         if (form.dataset.dssiAllowed === "true") return;
 
@@ -241,13 +324,10 @@ function attachSubmitGuard() {
                 risk: "【リスク】 送信内容は平文で流れるため、盗聴されるリスクが極めて高いです。",
                 rec: "本当に送信してよければ、「リスクを承知で送信」を押してください。"
             }, true, (isConfirmed) => {
-                // コールバック関数
                 if (isConfirmed) {
                     const inputVal = form.querySelector("input")?.value || "(入力なし)";
                     const displayVal = inputVal.length > 20 ? inputVal.substring(0, 20) + "..." : inputVal;
-                    
                     showSubmissionToast(`✅ 送信を受け付けました。\n内容: ${displayVal}`);
-
                     setTimeout(() => {
                         form.dataset.dssiAllowed = "true";
                         if (form.requestSubmit) {
@@ -269,9 +349,6 @@ function attachSubmitGuard() {
     }, true);
 }
 
-// ---------------------------------------------
-// Control Logic
-// ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;
     console.log("🛡️ DSSI Guard: Enabled.");
