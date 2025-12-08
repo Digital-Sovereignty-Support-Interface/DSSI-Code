@@ -8,8 +8,17 @@
 
 console.log("🛡️ DSSI Guard: Loaded.");
 
-// 監視対象の拡大 (name/idにemailを含むものも対象に)
-const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
+// 監視対象の拡大 (username, login, account などを追加)
+const TARGET_SELECTORS = `
+    input[type="password"],
+    input[type="email"],
+    input[name*="email"], input[id*="email"],
+    input[name*="user"], input[id*="user"],
+    input[name*="login"], input[id*="login"],
+    input[name*="account"], input[id*="account"],
+    input[name*="card"], input[name*="cc-"], input[id*="card"]
+`;
+
 let guardInterval = null;
 
 // ---------------------------------------------
