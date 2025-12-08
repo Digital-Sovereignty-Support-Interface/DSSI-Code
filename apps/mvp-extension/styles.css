@@ -1,17 +1,17 @@
 /* DSSI Honest Defense Chips Style */
 
-/* 監視対象フィールドのハイライト（控えめだが明確に） */
+/* 監視対象フィールドのハイライト */
 .dssi-observed-field {
   border: 2px solid #e67e22 !important; /* 警告色（オレンジ） */
   box-shadow: 0 0 5px rgba(230, 126, 34, 0.5);
   transition: all 0.3s ease;
 }
 
-/* チップス本体（吹き出し） */
+/* チップス本体 */
 .dssi-chip {
   position: absolute;
-  z-index: 2147483647; /* 最大値：他の要素より必ず上に */
-  background-color: #2c3e50; /* 知的なダークブルー */
+  z-index: 2147483647; /* 最前面 */
+  background-color: #2c3e50;
   color: #ecf0f1;
   padding: 10px 15px;
   border-radius: 4px;
@@ -20,13 +20,15 @@
   line-height: 1.4;
   box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   max-width: 300px;
-  border-left: 4px solid #e67e22; /* 誠実な防御のライン */
+  border-left: 4px solid #e67e22;
   
   /* アニメーション */
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.3s, transform 0.3s;
-  pointer-events: none; /* チップス自体はクリックを邪魔しない */
+  
+  /* ★重要: 通常はクリックを透過する（下の入力欄を邪魔しない） */
+  pointer-events: none; 
 }
 
 .dssi-chip.dssi-visible {
@@ -38,5 +40,12 @@
   font-weight: bold;
   margin-bottom: 4px;
   display: block;
-  color: #f1c40f; /* 注意を引く黄色 */
+  color: #f1c40f;
+}
+
+/* ★追加: ブロッカー用（操作が必要なのでクリックを有効化） */
+.dssi-blocker-chip {
+  pointer-events: auto !important;
+  background-color: #34495e; /* 少し重厚に */
+  box-shadow: 0 10px 20px rgba(0,0,0,0.5); /* 影を強く */
 }

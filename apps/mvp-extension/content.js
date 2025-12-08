@@ -1,7 +1,7 @@
 /**
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
- * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard、送信フィードバック。
+ * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
  * 哲学: "Facts over Fear."
  */
 
@@ -51,36 +51,20 @@ function getFieldConfig(field) {
 }
 
 // ---------------------------------------------
-// Helper: 送信フィードバック (トースト表示) ★新規追加
+// Helper: 送信フィードバック (トースト表示)
 // ---------------------------------------------
 function showSubmissionToast(message) {
     const toast = document.createElement("div");
     toast.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background-color: #2c3e50;
-        color: #fff;
-        padding: 15px 25px;
-        border-radius: 5px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        z-index: 2147483647;
-        font-family: sans-serif;
-        font-size: 14px;
-        border-left: 5px solid #27ae60;
-        opacity: 0;
-        transition: opacity 0.3s;
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background-color: #2c3e50; color: #fff; padding: 15px 25px;
+        border-radius: 5px; z-index: 2147483647; font-size: 14px;
+        border-left: 5px solid #27ae60; opacity: 0; transition: opacity 0.3s; pointer-events: none;
     `;
     toast.innerText = message;
     document.body.appendChild(toast);
 
-    // フェードイン
-    requestAnimationFrame(() => {
-        toast.style.opacity = "1";
-    });
-
-    // 1.5秒後に消える（念のため）
+    requestAnimationFrame(() => { toast.style.opacity = "1"; });
     setTimeout(() => {
         toast.style.opacity = "0";
         setTimeout(() => toast.remove(), 300);
@@ -104,6 +88,11 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null) {
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
+
+    // ★重要修正: ブロッカーの場合は強制的にクリックを有効化（CSSに依存しない）
+    if (isBlocker) {
+        chip.style.pointerEvents = "auto";
+    }
 
     let btnHtml = "";
     if (isBlocker) {
@@ -254,14 +243,11 @@ function attachSubmitGuard() {
             }, true, (isConfirmed) => {
                 // コールバック関数
                 if (isConfirmed) {
-                    // ★ フィードバック表示（トースト）
                     const inputVal = form.querySelector("input")?.value || "(入力なし)";
-                    // セキュリティのため、長い場合は省略
                     const displayVal = inputVal.length > 20 ? inputVal.substring(0, 20) + "..." : inputVal;
                     
                     showSubmissionToast(`✅ 送信を受け付けました。\n内容: ${displayVal}`);
 
-                    // 1秒後に送信実行
                     setTimeout(() => {
                         form.dataset.dssiAllowed = "true";
                         if (form.requestSubmit) {
@@ -284,7 +270,7 @@ function attachSubmitGuard() {
 }
 
 // ---------------------------------------------
-// Control Logic & Entry Point
+// Control Logic
 // ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;
