@@ -4,25 +4,27 @@
   <meta charset="UTF-8">
   <style>
     body {
-      width: 300px;
+      width: 320px;
       padding: 15px;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       background-color: #f8f9fa;
       color: #333;
     }
+
     h1 {
       font-size: 16px;
       color: #2c3e50;
       border-bottom: 2px solid #e9ecef;
       padding-bottom: 10px;
-      margin-top: 0;
+      margin: 0 0 15px 0;
     }
-    .status {
-      font-size: 12px;
-      margin-top: 10px;
+    
+    /* --- Main Toggle Switch --- */
+    .status-panel {
       display: flex;
-      align-items: center;
       justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
     }
     .switch {
       position: relative;
@@ -30,7 +32,11 @@
       width: 40px;
       height: 20px;
     }
-    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
     .slider {
       position: absolute;
       cursor: pointer;
@@ -50,13 +56,61 @@
       transition: .4s;
       border-radius: 50%;
     }
-    input:checked + .slider { background-color: #27ae60; }
-    input:checked + .slider:before { transform: translateX(20px); }
-    
+    input:checked + .slider {
+      background-color: #27ae60;
+    }
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+    #status-text {
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    /* --- Viscosity Level Slider (New) --- */
+    .level-control {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+      margin-bottom: 15px;
+    }
+    .level-label {
+      font-size: 12px;
+      font-weight: bold;
+      color: #7f8c8d;
+      display: block;
+      margin-bottom: 10px;
+    }
+    .range-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    input[type=range] {
+      flex-grow: 1;
+      accent-color: #3498db;
+      cursor: pointer;
+    }
+    #level-val {
+      font-weight: bold;
+      color: #3498db;
+      width: 60px;
+      text-align: right;
+      font-size: 12px;
+    }
+    .level-desc {
+      font-size: 10px;
+      color: #95a5a6;
+      margin-top: 5px;
+      height: 2.4em; /* 2行分確保してガタつき防止 */
+      line-height: 1.2;
+    }
+
+    /* --- Reset & Settings --- */
     .settings {
-      margin-top: 15px;
-      padding-top: 10px;
       border-top: 1px solid #e9ecef;
+      padding-top: 15px;
     }
     .btn-reset {
       width: 100%;
@@ -74,26 +128,39 @@
       color: #2c3e50;
     }
     
+    /* --- Philosophy (Updated) --- */
     .philosophy {
       margin-top: 15px;
-      font-size: 12px;
-      color: #7f8c8d;
-      font-style: italic;
-      background: #fff;
       padding: 10px;
+      background: #e8f4f8; /* 薄い青背景で強調 */
       border-left: 3px solid #3498db;
+      font-size: 11px;
+      color: #2c3e50;
+      line-height: 1.4;
+      font-style: italic;
     }
   </style>
 </head>
 <body>
   <h1>🏛️ DSSI System</h1>
   
-  <div class="status">
+  <div class="status-panel">
     <span id="status-text">● Active</span>
     <label class="switch">
       <input type="checkbox" id="toggle-guard" checked>
       <span class="slider"></span>
     </label>
+  </div>
+
+  <div class="level-control" id="level-control-panel">
+    <span class="level-label">🚦 介入レベル (Viscosity)</span>
+    <div class="range-container">
+      <input type="range" id="viscosity-range" min="1" max="3" step="1" value="2">
+      <span id="level-val">Level 2</span>
+    </div>
+    <div class="level-desc" id="level-desc">
+      標準: 重要フィールドと送信リスクを検知。
+    </div>
   </div>
   
   <div class="settings">
@@ -101,7 +168,8 @@
   </div>
   
   <div class="philosophy">
-    "私たちは、あなたの『思考』を代行しません。"
+    "私たちは、あなたの『思考』を代行しません。<br>
+    We do not substitute your thought."
   </div>
 
   <script src="popup.js"></script>
