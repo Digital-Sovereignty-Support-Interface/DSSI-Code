@@ -2,14 +2,24 @@
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
- * 拡張: 枠線永続化、完全自律型ホバー制御 (Autonomous Hover)、リアルタイムリセット。
+ * 拡張: 枠線永続化、ホバー安定化、自動復活、リアルタイムリセット、数値ベースのリスク判定。
  * 哲学: "Facts over Fear."
  */
 
 console.log("🛡️ DSSI Guard: Loaded.");
 
-const TARGET_SELECTORS = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="user"], input[id*="user"], input[name*="login"], input[id*="login"], input[name*="account"], input[id*="account"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
+// 監視対象定義 (Level 3用: 全ての入力)
+const SELECTORS_ALL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea';
+const SELECTORS_CORE = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="user"], input[id*="user"], input[name*="login"], input[id*="login"], input[name*="account"], input[id*="account"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
+
 let guardInterval = null;
+let currentLevel = 2; // デフォルト標準
+
+// ★ リスクレベル定義 (数値化による安定ロジック)
+const RISK_CRITICAL = 0; // 問答無用 (HTTP/CertError)
+const RISK_HIGH     = 1; // パスワード/決済
+const RISK_MID      = 2; // ID/Email
+const RISK_LOW      = 3; // 汎用
 
 // ---------------------------------------------
 // Logic: ストレージ操作
@@ -59,46 +69,76 @@ async function updateChipStats(chipId, changes) {
 }
 
 // ---------------------------------------------
-// Logic: フィールド定義
+// Logic: フィールド定義とリスクランク (数値化)
 // ---------------------------------------------
 function getFieldConfig(field) {
     const type = (field.type || "").toLowerCase();
     const name = (field.name || field.id || "").toLowerCase();
 
+    // A. パスワード (HIGH: 1)
     if (type === "password") {
         return {
             id: "guide_password",
+            riskLevel: RISK_HIGH,
             title: "ℹ️ 技術情報: キー入力イベント",
-            borderColor: "#e67e22",
+            borderColor: "#e67e22", // オレンジ
             fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
             purpose: "【目的】 この技術は通常、利便性（入力補助など）のために使われます。",
             risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
             rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
         };
     }
+    
+    // B. クレジットカード (HIGH: 1)
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
             id: "guide_credit_card",
+            riskLevel: RISK_HIGH,
             title: "💳 技術情報: 決済情報の入力",
-            borderColor: "#e74c3c",
+            borderColor: "#e74c3c", // 赤
             fact: "【確認】 財務資産に直結する情報の入力欄です。",
             purpose: "【目的】 サービスや商品の購入決済に使用されます。",
             risk: "【リスク】 通信経路や保存方法に不備がある場合、資産の不正利用に直結します。",
             rec: "ブラウザのアドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
         };
     }
+
+    // C. メールアドレス/ID (MID: 2)
     if (type === "email" || name.includes("email") || name.includes("mail") || name.includes("user") || name.includes("login") || name.includes("account")) {
         return {
             id: "guide_email",
+            riskLevel: RISK_MID,
             title: "📧 技術情報: 連絡先情報の入力",
-            borderColor: "#2ecc71",
+            borderColor: "#2ecc71", // 緑
             fact: "【確認】 個人を特定、追跡可能なID（メールアドレス）の入力欄です。",
             purpose: "【目的】 連絡、認証、およびユーザーのトラッキング（追跡）に使用されます。",
             risk: "【リスク】 フィッシングサイトの場合、入力した時点でリスト化される可能性があります。",
             rec: "このサイトのドメイン（URL）が、意図した相手のものであるか確認してください。"
         };
     }
-    return null;
+
+    // D. 汎用入力 (LOW: 3)
+    // Level 3の時のみ対象となる
+    return {
+        id: "guide_general",
+        riskLevel: RISK_LOW,
+        title: "📝 技術情報: 一般入力フィールド",
+        borderColor: "#5dade2", // 薄い水色
+        fact: "【確認】 汎用的な情報の入力欄です。",
+        purpose: "【目的】 検索、コメント、その他のデータ送信に使用されます。",
+        risk: "【リスク】 些細な情報でも、組み合わせることで個人の特定や行動追跡に利用される可能性があります。",
+        rec: "不要な個人情報の入力を避けてください。"
+    };
+}
+
+// ---------------------------------------------
+// Logic: 監視対象判定 (数値ロジック)
+// ---------------------------------------------
+function shouldMonitor(riskLevel) {
+    // ユーザーのレベル(1~3)が、対象のリスク(0~3)以上であれば表示する
+    // 例: Level 1 vs Risk 1(High) -> 1 >= 1 (True)
+    // 例: Level 1 vs Risk 2(Mid)  -> 1 >= 2 (False)
+    return currentLevel >= riskLevel;
 }
 
 // ---------------------------------------------
@@ -122,20 +162,25 @@ function showSubmissionToast(message) {
 }
 
 // ---------------------------------------------
+// Helper: 全チップスの物理消去
+// ---------------------------------------------
+function hideAllChips() {
+    document.querySelectorAll('.dssi-chip').forEach(chip => {
+        if (!chip.classList.contains('dssi-blocker-chip')) {
+            chip.style.display = 'none';
+            chip.classList.remove("dssi-visible");
+        }
+    });
+}
+
+// ---------------------------------------------
 // Helper: チップスの描画
 // ---------------------------------------------
 function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
-    // 既存リソースの掃除
     if (field.dssiChipElement) {
         field.dssiChipElement.remove();
         field.dssiChipElement = null;
     }
-    // 古いリスナー解除関数があれば実行
-    if (field.dssiCleanup) {
-        field.dssiCleanup();
-        field.dssiCleanup = null;
-    }
-
     if (isBlocker) {
         const existingBlocker = document.querySelector('.dssi-blocker-chip');
         if (existingBlocker) existingBlocker.remove();
@@ -149,6 +194,13 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         field.classList.add("dssi-observed-field");
     }
 
+    if (!isBlocker && currentLevel === 1 && data.riskLevel > RISK_HIGH) {
+        // Level 1 では High(1) より弱いリスク(2,3)は枠線も消す
+        field.style.border = "";
+        field.classList.remove("dssi-observed-field");
+        return;
+    }
+
     if (stats && stats.muted) return;
 
     const chip = document.createElement("div");
@@ -156,7 +208,6 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
     
-    // 初期状態は非表示
     if (!isBlocker) chip.style.display = 'none';
     chip.style.pointerEvents = "auto";
 
@@ -179,7 +230,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     }
 
     chip.innerHTML = `
-        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : (leftBorderColor === '#2ecc71' ? '#2ecc71' : '#e74c3c'))}">${data.title}</span>
+        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : (leftBorderColor === '#2ecc71' ? '#2ecc71' : (leftBorderColor === '#5dade2' ? '#5dade2' : '#e74c3c')))}">${data.title}</span>
         ${data.fact}<br>
         ${data.purpose}<br>
         ${data.risk}<br>
@@ -199,7 +250,6 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         chip.style.left = `${rect.left + scrollX}px`;
     };
 
-    // リスナー解除用配列
     const cleanupFns = [];
 
     if (isBlocker) {
@@ -227,36 +277,25 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         setTimeout(() => document.addEventListener("click", outsideClickListener), 100);
 
     } else {
-        // ★ 自律型ホバー制御 (Autonomous Hover Logic)
-        // 他のチップスのことは気にしない。自分だけの表示/非表示を管理する。
-        
-        let hideTimeout;
+        let hoverTimeout;
         let isHovering = false;
 
-        // 表示: マウスが乗った/フォーカスした
         const showChip = () => {
             isHovering = true;
-            if (hideTimeout) clearTimeout(hideTimeout);
-            
-            // 物理表示
+            if (hoverTimeout) clearTimeout(hoverTimeout);
+            hideAllChips();
             chip.style.display = 'block';
             updatePosition();
-            
-            // アニメーション開始
             requestAnimationFrame(() => chip.classList.add("dssi-visible"));
         };
 
-        // 非表示予約: マウスが外れた/フォーカス外れた
         const scheduleHide = () => {
             isHovering = false;
-            if (hideTimeout) clearTimeout(hideTimeout);
+            if (hoverTimeout) clearTimeout(hoverTimeout);
             
-            // 猶予時間 (600ms)
             hideTimeout = setTimeout(() => {
-                // 猶予後にまだ戻ってきていなければ消す
                 if (!isHovering) {
                     chip.classList.remove("dssi-visible");
-                    // アニメーション完了後に物理削除
                     setTimeout(() => {
                         if (!isHovering && !chip.classList.contains("dssi-visible")) {
                             chip.style.display = 'none';
@@ -266,13 +305,11 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
             }, 600);
         };
         
-        // チップス側の維持ロジック
         const keepChip = () => {
             isHovering = true;
-            if (hideTimeout) clearTimeout(hideTimeout);
+            if (hoverTimeout) clearTimeout(hoverTimeout);
         };
 
-        // イベントリスナー登録
         field.addEventListener("focus", showChip);
         field.addEventListener("blur", scheduleHide);
         field.addEventListener("mouseenter", showChip);
@@ -281,16 +318,13 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         chip.addEventListener("mouseenter", keepChip);
         chip.addEventListener("mouseleave", scheduleHide);
 
-        // クリーンアップ登録
         cleanupFns.push(() => {
             field.removeEventListener("focus", showChip);
             field.removeEventListener("blur", scheduleHide);
             field.removeEventListener("mouseenter", showChip);
             field.removeEventListener("mouseleave", scheduleHide);
-            // chipはDOMごと消えるので解除不要
         });
 
-        // ミュートボタン
         const muteBtn = chip.querySelector("#dssi-mute-btn");
         if (muteBtn) {
             muteBtn.addEventListener("click", (e) => {
@@ -311,13 +345,32 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     }
 }
 
-// ... (以下、processField, attachChips, resetGuards, attachSubmitGuard, Control Logic は変更なし)
-// 前回のファイル末尾をそのまま結合してください。
-
+// ---------------------------------------------
+// Logic: フィールド処理
+// ---------------------------------------------
 async function processField(field) {
+    // アクティブなフィールドはスキップ（ただしレベル変更時は再評価が必要なので、resetGuardsで解除される）
     if (field.dataset.dssiBound === "active") return;
+    
     let chipData = getFieldConfig(field);
     if (!chipData) return;
+
+    // ★重要: プロトコルによるリスクオーバーライド
+    const protocol = window.location.protocol;
+    if (protocol === 'http:') {
+        chipData.riskLevel = RISK_CRITICAL; // 問答無用でレベル0扱い
+    }
+
+    // ★ 監視対象チェック (数値比較)
+    if (!shouldMonitor(chipData.riskLevel)) {
+        if (field.dssiChipElement) {
+            field.dssiChipElement.remove();
+            field.dssiChipElement = null;
+        }
+        field.style.border = "";
+        field.classList.remove("dssi-observed-field");
+        return;
+    }
 
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
@@ -337,7 +390,6 @@ async function processField(field) {
     }
 
     field.dataset.dssiBound = "active";
-    const protocol = window.location.protocol;
 
     if (protocol === 'http:') {
         chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
@@ -369,11 +421,25 @@ async function processField(field) {
     }
 }
 
-function attachChips() {
-    const passwordFields = document.querySelectorAll(TARGET_SELECTORS);
-    passwordFields.forEach(processField);
+// ---------------------------------------------
+// Logic: 監視対象判定 (数値ロジック)
+// ---------------------------------------------
+function shouldMonitor(riskLevel) {
+    // ユーザーレベルがリスクレベル以上なら表示
+    // Lv1 >= 0(Critical) -> True
+    // Lv1 >= 1(High) -> True
+    // Lv1 >= 2(Mid) -> False
+    return currentLevel >= riskLevel;
 }
 
+function attachChips() {
+    const selector = (currentLevel >= 3) ? SELECTORS_ALL : SELECTORS_CORE;
+    const fields = document.querySelectorAll(selector);
+    fields.forEach(processField);
+}
+
+// ... (resetGuards, attachSubmitGuard, Control Logic は変更なし)
+// 前回のファイル末尾をそのまま結合してください。
 function resetGuards() {
     console.log("🛡️ DSSI Guard: Resetting...");
     document.querySelectorAll('.dssi-chip').forEach(el => el.remove());
@@ -466,7 +532,9 @@ function stopGuard() {
     });
 }
 
-chrome.storage.local.get(['dssiEnabled'], (result) => {
+chrome.storage.local.get(['dssiEnabled', 'dssiLevel'], (result) => {
+    currentLevel = result.dssiLevel || 2;
+    console.log(`🛡️ DSSI Level: ${currentLevel}`);
     if (result.dssiEnabled !== false) {
         startGuard();
     } else {
@@ -484,5 +552,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (request.action === "RESET_GUARD") {
         resetGuards();
+    }
+    if (request.action === "UPDATE_SETTINGS") {
+        if (request.level !== undefined) {
+            currentLevel = request.level;
+            console.log(`🛡️ DSSI Level Updated: ${currentLevel}`);
+            resetGuards(); 
+        }
+        if (request.enabled !== undefined) {
+            request.enabled ? startGuard() : stopGuard();
+        }
     }
 });
