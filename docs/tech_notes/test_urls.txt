@@ -20,6 +20,9 @@ DSSIが「⚠️ 通信経路が暗号化されていません」というチッ
 架空送信フィールド
 document.body.innerHTML += '<form style="margin:50px; border:1px solid red; padding:20px;">HTTP Form<br><input type="text"><br><br><button type="submit">送信テスト</button></form>';
 
+document.body.innerHTML += '<input type="email" placeholder="Email (Green)" style="margin:20px; display:block;">';
+document.body.innerHTML += '<input name="card-number" placeholder="Card (Red)" style="margin:20px; display:block;">';
+document.body.innerHTML += '<input type="password" placeholder="Pass (Orange)" style="margin:20px; display:block;">';
 
 安心ポイント: RFC 2606で予約されているため、将来誰かに買収されて変なサイトになるリスクがゼロです。
 
@@ -52,3 +55,28 @@ wrong.host.badssl.com: 「ドメイン名不一致」のテスト。
 self-signed.badssl.com: 「オレオレ証明書」のテスト。
 
 実装への示唆: DSSIが単に「HTTPSならヨシ」とするのではなく、「HTTPSだけど証明書が腐っている」場合をどう判定するか、このサイトを使えば深く検証できます。
+
+
+async function getChipStats(chipId) {
+    return new Promise((resolve) => {
+        // ★追加: 自分がまだ生きているか確認
+        if (!chrome.runtime?.id) {
+            // 死んでいれば何もしない（プロミスを永遠に保留、またはデフォルト値を返す）
+            return; 
+        }
+        
+        try {
+            chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
+                // コールバック内でエラーが起きる可能性もあるのでチェック
+                if (chrome.runtime.lastError) {
+                    console.debug("DSSI: Context invalid, stopping execution.");
+                    return;
+                }
+                const stats = result[STORAGE_KEY_STATS] || {};
+                resolve(stats[chipId] || { count: 0, muted: false });
+            });
+        } catch (e) {
+            console.debug("DSSI: Extension context invalidated.");
+        }
+    });
+}

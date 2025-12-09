@@ -28,10 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if(confirm("非表示（ミュート）にしたガイドをすべて復活させますか？")) {
         // 統計情報をクリア
         chrome.storage.local.remove(['dssi_stats'], () => {
-            // ★追加: アクティブなタブに「リセットされたぞ！」と伝える
-            sendMessageToActiveTab({ action: "RESET_GUARD" });
-            
-            // UI更新
+            alert("リセットしました。ページを更新するとガイドが再表示されます。");
+            // 念のため再読み込みを促す
             resetBtn.textContent = "✓ リセット完了";
             setTimeout(() => resetBtn.textContent = "↺ 非表示にしたガイドをリセット", 2000);
         });
