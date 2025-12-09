@@ -2,27 +2,28 @@
  * DSSI Content Script (Observer & Guide)
  * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
  * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
- * 拡張: 枠線永続化、ホバー安定化、自動復活、リアルタイムリセット、数値ベースのリスク判定。
- * 哲学: "Facts over Fear."
+ * 拡張: 粘性レベル制御 (Revised Logic)、枠線永続化、ホバー安定化、自動復活、リアルタイムリセット。
+ * 哲学: "Facts over Fear." / "We do not substitute your thought."
  */
 
 console.log("🛡️ DSSI Guard: Loaded.");
 
-// 監視対象定義 (Level 3用: 全ての入力)
+// 監視対象定義
 const SELECTORS_ALL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea';
 const SELECTORS_CORE = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="user"], input[id*="user"], input[name*="login"], input[id*="login"], input[name*="account"], input[id*="account"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
 
 let guardInterval = null;
 let currentLevel = 2; // デフォルト標準
 
-// ★ リスクレベル定義 (数値化による安定ロジック)
-const RISK_CRITICAL = 0; // 問答無用 (HTTP/CertError)
-const RISK_HIGH     = 1; // パスワード/決済
-const RISK_MID      = 2; // ID/Email
-const RISK_LOW      = 3; // 汎用
+// ★ リスクレベル定義 (ユーザー意図に合わせて再定義)
+// Level N を選択したとき、Risk N 以下のものを表示する
+const RISK_CRITICAL = 0; // 問答無用 (HTTP/CertError) -> Lv1でも表示
+const RISK_HIGH     = 2; // パスワード/決済 -> Lv2以上で表示
+const RISK_MID      = 3; // ID/Email -> Lv3以上で表示
+const RISK_LOW      = 3; // 汎用 -> Lv3以上で表示
 
 // ---------------------------------------------
-// Logic: ストレージ操作
+// Logic: ストレージ操作 (変更なし)
 // ---------------------------------------------
 const STORAGE_KEY_STATS = 'dssi_stats';
 const MUTE_EXPIRATION_MS = 60 * 1000; // テスト用: 1分
@@ -75,7 +76,7 @@ function getFieldConfig(field) {
     const type = (field.type || "").toLowerCase();
     const name = (field.name || field.id || "").toLowerCase();
 
-    // A. パスワード (HIGH: 1)
+    // A. パスワード (HIGH: 2)
     if (type === "password") {
         return {
             id: "guide_password",
@@ -89,7 +90,7 @@ function getFieldConfig(field) {
         };
     }
     
-    // B. クレジットカード (HIGH: 1)
+    // B. クレジットカード (HIGH: 2)
     if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
         return {
             id: "guide_credit_card",
@@ -103,7 +104,7 @@ function getFieldConfig(field) {
         };
     }
 
-    // C. メールアドレス/ID (MID: 2)
+    // C. メールアドレス/ID (MID: 3)
     if (type === "email" || name.includes("email") || name.includes("mail") || name.includes("user") || name.includes("login") || name.includes("account")) {
         return {
             id: "guide_email",
@@ -117,8 +118,8 @@ function getFieldConfig(field) {
         };
     }
 
-    // D. 汎用入力 (LOW: 3)
-    // Level 3の時のみ対象となる
+    // D. 汎用入力 (LOW: 3) - Level 3で表示
+    // ★修正: if文を削除し、常に定義を返す（表示判定は shouldMonitor で行うため）
     return {
         id: "guide_general",
         riskLevel: RISK_LOW,
@@ -135,9 +136,9 @@ function getFieldConfig(field) {
 // Logic: 監視対象判定 (数値ロジック)
 // ---------------------------------------------
 function shouldMonitor(riskLevel) {
-    // ユーザーのレベル(1~3)が、対象のリスク(0~3)以上であれば表示する
-    // 例: Level 1 vs Risk 1(High) -> 1 >= 1 (True)
-    // 例: Level 1 vs Risk 2(Mid)  -> 1 >= 2 (False)
+    // ユーザーレベルがリスクレベル以上なら表示
+    // Lv1 >= 0(Critical) -> True
+    // Lv1 >= 2(High) -> False (これでPass/Cardは消える)
     return currentLevel >= riskLevel;
 }
 
@@ -194,8 +195,8 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         field.classList.add("dssi-observed-field");
     }
 
-    if (!isBlocker && currentLevel === 1 && data.riskLevel > RISK_HIGH) {
-        // Level 1 では High(1) より弱いリスク(2,3)は枠線も消す
+    // ★重要: 表示対象外（レベル不足）なら枠線も消して帰る
+    if (!isBlocker && !shouldMonitor(data.riskLevel)) {
         field.style.border = "";
         field.classList.remove("dssi-observed-field");
         return;
@@ -314,7 +315,6 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         field.addEventListener("blur", scheduleHide);
         field.addEventListener("mouseenter", showChip);
         field.addEventListener("mouseleave", scheduleHide);
-        
         chip.addEventListener("mouseenter", keepChip);
         chip.addEventListener("mouseleave", scheduleHide);
 
@@ -349,19 +349,18 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
 // Logic: フィールド処理
 // ---------------------------------------------
 async function processField(field) {
-    // アクティブなフィールドはスキップ（ただしレベル変更時は再評価が必要なので、resetGuardsで解除される）
-    if (field.dataset.dssiBound === "active") return;
+    // アクティブなフィールドもレベル変更で対象外になる可能性があるため、チェックを通過させる
+    // if (field.dataset.dssiBound === "active") return; 
     
     let chipData = getFieldConfig(field);
     if (!chipData) return;
 
-    // ★重要: プロトコルによるリスクオーバーライド
     const protocol = window.location.protocol;
     if (protocol === 'http:') {
-        chipData.riskLevel = RISK_CRITICAL; // 問答無用でレベル0扱い
+        chipData.riskLevel = RISK_CRITICAL; // HTTPは問答無用でレベル0
     }
 
-    // ★ 監視対象チェック (数値比較)
+    // ★ レベル判定 (renderChip内でも行うが、ここでも事前チェック)
     if (!shouldMonitor(chipData.riskLevel)) {
         if (field.dssiChipElement) {
             field.dssiChipElement.remove();
@@ -369,8 +368,12 @@ async function processField(field) {
         }
         field.style.border = "";
         field.classList.remove("dssi-observed-field");
+        // datasetは消さないと、レベルを上げた時に再検知されない？
+        // -> resetGuards で dssiBound は消されるのでOK
         return;
     }
+
+    if (field.dataset.dssiBound === "active") return; // 既にアクティブならスキップ
 
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
@@ -425,10 +428,6 @@ async function processField(field) {
 // Logic: 監視対象判定 (数値ロジック)
 // ---------------------------------------------
 function shouldMonitor(riskLevel) {
-    // ユーザーレベルがリスクレベル以上なら表示
-    // Lv1 >= 0(Critical) -> True
-    // Lv1 >= 1(High) -> True
-    // Lv1 >= 2(Mid) -> False
     return currentLevel >= riskLevel;
 }
 
@@ -438,8 +437,7 @@ function attachChips() {
     fields.forEach(processField);
 }
 
-// ... (resetGuards, attachSubmitGuard, Control Logic は変更なし)
-// 前回のファイル末尾をそのまま結合してください。
+// ... (resetGuards以降は変更なし)
 function resetGuards() {
     console.log("🛡️ DSSI Guard: Resetting...");
     document.querySelectorAll('.dssi-chip').forEach(el => el.remove());
