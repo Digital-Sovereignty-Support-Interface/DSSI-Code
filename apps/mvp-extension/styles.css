@@ -2,18 +2,15 @@
 
 /* 監視対象フィールドの基本スタイル */
 .dssi-observed-field {
-  /* !important を削除。JS側の指定(赤/緑/橙)を優先させる */
   border-width: 2px;
   border-style: solid;
-  /* border-color は JSで制御するためここでは指定しない、またはフォールバックのみ */
   border-color: #e67e22; 
-  
   box-shadow: 0 0 5px rgba(230, 126, 34, 0.5);
   transition: all 0.3s ease;
 }
 
-/* ★追加: 危険フィールド（HTTPなど）用の強調スタイル */
-.dssi-observed-field[style*="rgb(231, 76, 60)"], /* 赤色(#e74c3c)の場合 */
+/* 危険フィールド（HTTPなど）用の強調スタイル */
+.dssi-observed-field[style*="rgb(231, 76, 60)"],
 .dssi-observed-field[style*="#e74c3c"] {
   box-shadow: 0 0 8px rgba(231, 76, 60, 0.8) !important;
   animation: dssi-pulse 2s infinite;
@@ -28,7 +25,7 @@
 /* チップス本体 */
 .dssi-chip {
   position: absolute;
-  z-index: 2147483647; /* 最前面 */
+  z-index: 2147483647;
   background-color: #2c3e50;
   color: #ecf0f1;
   padding: 10px 15px;
@@ -38,13 +35,25 @@
   line-height: 1.4;
   box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   max-width: 300px;
-  /* 左線の色はJSで制御 */
   
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.3s, transform 0.3s;
   
-  pointer-events: none; /* 通常はクリック透過 */
+  /* 通常はクリック透過だが、JSで必要に応じてautoにする */
+  pointer-events: none; 
+}
+
+/* ★追加: 透明な架け橋 (Invisible Bridge) */
+/* チップスと入力欄の間の隙間を埋め、マウス移動を途切れさせない */
+.dssi-chip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 20px; /* 隙間より大きく */
+  background: transparent;
 }
 
 .dssi-chip.dssi-visible {
@@ -59,7 +68,6 @@
   color: #f1c40f;
 }
 
-/* ブロッカー用（クリック有効化） */
 .dssi-blocker-chip {
   pointer-events: auto !important;
   background-color: #34495e;
