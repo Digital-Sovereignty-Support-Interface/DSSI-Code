@@ -26,8 +26,7 @@ const RISK_LOW      = 3; // 汎用 -> Lv3以上で表示
 // Logic: ストレージ操作 (変更なし)
 // ---------------------------------------------
 const STORAGE_KEY_STATS = 'dssi_stats';
-const MUTE_EXPIRATION_MS = 60 * 1000; // テスト用: 1分
-
+const MUTE_EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000; // 30日(30d*24h*60m*60s*1000ms) 
 async function getChipStats(chipId) {
     return new Promise((resolve) => {
         if (!chrome.runtime?.id) return resolve({ count: 0, muted: false, lastMutedAt: null });

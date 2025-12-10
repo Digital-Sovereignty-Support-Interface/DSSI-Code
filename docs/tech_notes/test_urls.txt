@@ -19,7 +19,6 @@ DSSIが「⚠️ 通信経路が暗号化されていません」というチッ
 
 架空送信フィールド
 document.body.innerHTML += '<form style="margin:50px; border:1px solid red; padding:20px;">HTTP Form<br><input type="text"><br><br><button type="submit">送信テスト</button></form>';
-
 document.body.innerHTML += '<input type="email" placeholder="Email (Green)" style="margin:20px; display:block;">';
 document.body.innerHTML += '<input name="card-number" placeholder="Card (Red)" style="margin:20px; display:block;">';
 document.body.innerHTML += '<input type="password" placeholder="Pass (Orange)" style="margin:20px; display:block;">';
