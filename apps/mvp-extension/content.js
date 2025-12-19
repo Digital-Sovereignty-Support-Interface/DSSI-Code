@@ -211,48 +211,48 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     if (!isBlocker) chip.style.display = 'none';
     chip.style.pointerEvents = "auto";
 
+// --- [MODIFIED] renderChip: ボタン生成ロジックの刷新 ---
+// 変更点: isBlocker の時、タイトルに「保護」が含まれるなら3ボタン化する
+
     let btnHtml = "";
     let footerHtml = "";
 
-// renderChip 関数内のボタン生成部分の修正案
-
     if (isBlocker) {
-        // 内容保護シールド（Shield）か、通信ブロック（HTTP）かでボタンを出し分ける
-        const isShieldMode = data.title.includes("保護"); // タイトルで判定（簡易的）
+        // ' VBAでいうところの「内容による分岐」
+        const isShieldMode = data.title.includes("保護");
 
-        btnHtml = `
-        <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
-            <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">やめる</button>
-            ${isShieldMode ? `
+        if (isShieldMode) {
+            // ' ケースA: 内容保護シールド用の3ボタン構成
+            btnHtml = `
+            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
+                <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">やめる</button>
                 <button id="dssi-raw-btn" style="padding:6px 12px; background:#7f8c8d; color:white; border:none; border-radius:3px; cursor:pointer;">原文のまま送信</button>
                 <button id="dssi-confirm-btn" style="padding:6px 12px; background:#3498db; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">🛡️ 保護して送信</button>
-            ` : `
+            </div>`;
+        } else {
+            // ' ケースB: 従来のHTTP通信警告用の2ボタン構成
+            btnHtml = `
+            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
+                <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">やめる</button>
                 <button id="dssi-confirm-btn" style="padding:6px 12px; background:#e74c3c; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">リスクを承知で送信</button>
-            `}
-        </div>`;
-    } else if (stats) {
-        footerHtml = `
-        <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
-            <span>表示回数: ${stats.count}</span>
-            <button id="dssi-mute-btn" style="background:transparent; border:1px solid #7f8c8d; color:#bdc3c7; border-radius:3px; cursor:pointer; padding:2px 5px; font-size:10px;">今後表示しない</button>
-        </div>
-        `;
+            </div>`;
+        }
     }
-    
-    // if (isBlocker) {
-    //     btnHtml = `
-    //     <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
-    //         <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">送信をやめる</button>
-    //         <button id="dssi-confirm-btn" style="padding:6px 12px; background:#e74c3c; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">リスクを承知で送信</button>
-    //     </div>`;
-    // } else if (stats) {
-    //     footerHtml = `
-    //     <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
-    //         <span>表示回数: ${stats.count}</span>
-    //         <button id="dssi-mute-btn" style="background:transparent; border:1px solid #7f8c8d; color:#bdc3c7; border-radius:3px; cursor:pointer; padding:2px 5px; font-size:10px;">今後表示しない</button>
-    //     </div>
-    //     `;
-    // }
+
+    // ' footerHtml は削除せず、統計情報（stats）があれば常に組み立てる（独立した論理）
+    if (typeof getFieldStats === "function") {
+        const stats = getFieldStats(field);
+        if (stats) {
+            footerHtml = `
+            <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
+                <span>表示回数: ${stats.count}</span>
+                <button id="dssi-mute-btn" style="...">今後表示しない</button>
+            </div>`;
+        }else {
+        // 関数がない場合は、空のままエラーを出さずに進む
+        footerHtml = "";
+        }
+    }
 
     chip.innerHTML = `
         <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : (leftBorderColor === '#2ecc71' ? '#2ecc71' : (leftBorderColor === '#5dade2' ? '#5dade2' : '#e74c3c')))}">${data.title}</span>
@@ -281,16 +281,33 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         updatePosition();
         chip.classList.add("dssi-visible");
         
-        const confirmBtn = chip.querySelector("#dssi-confirm-btn");
-        const cancelBtn = chip.querySelector("#dssi-cancel-btn");
+        const confirmBtn = chip.querySelector("#dssi-confirm-btn"); // 「保護して送信」または「承知で送信」
+        const rawBtn = chip.querySelector("#dssi-raw-btn");         // 「原文のまま送信」
+        const cancelBtn = chip.querySelector("#dssi-cancel-btn");   // 「やめる」
         
+        // 1. 承認・保護ボタンの処理
         if (confirmBtn) {
-            const h = (e) => { e.preventDefault(); chip.remove(); if (blockerCallback) blockerCallback(true); };
-            confirmBtn.addEventListener("click", h);
+            confirmBtn.addEventListener("click", (e) => { 
+                e.preventDefault(); 
+                chip.remove(); 
+                if (blockerCallback) blockerCallback('protected'); // 'true' の代わりに 'protected'
+            });
         }
+        // 2. 原文送信ボタンの処理（新規）
+        if (rawBtn) {
+            rawBtn.addEventListener("click", (e) => { 
+                e.preventDefault(); 
+                chip.remove(); 
+                if (blockerCallback) blockerCallback('raw');       // 'raw' を返す
+            });
+        }
+        // 3. キャンセルボタンの処理
         if (cancelBtn) {
-            const h = (e) => { e.preventDefault(); chip.remove(); if (blockerCallback) blockerCallback(false); };
-            cancelBtn.addEventListener("click", h);
+            cancelBtn.addEventListener("click", (e) => { 
+                e.preventDefault(); 
+                chip.remove(); 
+                if (blockerCallback) blockerCallback('cancel');    // 'false' の代わりに 'cancel'
+            });
         }
         
         const outsideClickListener = (e) => {
@@ -463,6 +480,7 @@ function attachChips() {
 
 // 本来は chrome.storage から読み込むのが理想的
 const MY_SECRETS = {
+    "テスト": "[TEST_MASK]"
     "清水克敏": "[PERSON_A]",
     "清水": "[PERSON_B]",
     "清水 克敏": "[PERSON_C]",
@@ -473,40 +491,47 @@ const MY_SECRETS = {
 /**
  * 精緻化された applyShield：固有名詞などの伏せ字化
  * @param {string} text - 原文
+ * @param {object} secrets - ユーザー定義辞書（デフォルトはMY_SECRETS）
  * @returns {object} - { shieldedText: 加工後, mapping: 復元用辞書, count: 件数 }
  */
-function applyShield(text) {
+function applyShield(text, secrets = MY_SECRETS) {
     let shieldedText = text;
-    let mapping = {};
+    let mapping = {}; // ★マスターの mapping を復元
     let count = 0;
 
     // 1. 自動検知（正規表現）: メール、電話番号、URLなど
     const patterns = {
         EMAIL: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
         PHONE: /\d{2,4}-\d{2,4}-\d{4}/g,
-        // 必要に応じて郵便番号なども追加
     };
 
     for (const [type, reg] of Object.entries(patterns)) {
         shieldedText = shieldedText.replace(reg, (match) => {
             count++;
-            return `[${type}_${count}]`;
+            const placeholder = `[${type}_${count}]`;
+            mapping[placeholder] = match; // ★何を置換したか記録
+            return placeholder;
         });
     }
 
-    // 2. ユーザー定義辞書（MY_SECRETS）による高精度置換
-    // マスターが登録した「絶対に漏らしたくない固有名詞」
-    for (const [realName, placeholder] of Object.entries(MY_SECRETS)) {
+    // 2. ユーザー定義辞書（secrets）による置換
+    for (const [realName, placeholder] of Object.entries(secrets)) {
+    if (!realName || realName.trim() === "") continue;
+        
         const escaped = realName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp(escaped, 'g');
+        
+        // 置換前に一致箇所があるか確認し、mappingに記録
         const matches = shieldedText.match(re);
         if (matches) {
             count += matches.length;
+            mapping[placeholder] = realName; // ★辞書分も記録
             shieldedText = shieldedText.replace(re, placeholder);
         }
     }
 
-    return { shieldedText, count };
+    // マスターの当初の戻り値形式 { shieldedText, mapping, count } を完全に守ります
+    return { shieldedText, mapping, count };
 }
 
 // ... (resetGuards以降は変更なし)
@@ -538,14 +563,13 @@ function resetGuards() {
  * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
  */
 function attachContentShield() {
-    // GeminiやChatGPTなどの「ボタン」を直接監視（submitイベントが発生しないため）
+    console.log("Send button found:", sendBtn);
     const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"]');
     
     if (sendBtn && !sendBtn.dataset.shieldBound) {
         sendBtn.dataset.shieldBound = "true";
         
         sendBtn.addEventListener('click', (e) => {
-            // すでにシールド確認済みの場合はスルー
             if (sendBtn.dataset.shieldVerified === "true") {
                 sendBtn.dataset.shieldVerified = "false";
                 return;
@@ -554,37 +578,46 @@ function attachContentShield() {
             const inputField = document.querySelector('div[contenteditable="true"], textarea');
             const rawText = inputField ? (inputField.innerText || inputField.value) : "";
             
-            // 🛡️ 伏せ字処理を実行
-            const { shieldedText, replacedCount } = applyShield(rawText);
+            const { shieldedText, count } = applyShield(rawText); // ' replacedCount を count に修正（applyShieldの戻り値に合わせる）
 
-            // 伏せ字が発生した、あるいはレベル3(主権)の場合は確認を出す
-            if (replacedCount > 0 || currentLevel === 3) {
+            // 伏せ字が発生した、あるいはレベル3の場合は確認を出す
+            if (count > 0 || (typeof currentLevel !== "undefined" && currentLevel === 3)) {
                 e.preventDefault();
                 e.stopPropagation();
 
                 renderChip(sendBtn, {
                     title: "🛡️ DSSI 内容保護シールド",
                     borderColor: "#3498db",
-                    fact: `${replacedCount} 件の機密情報を [MASK] に置換しました。`,
+                    fact: `${count} 件の機密情報を [MASK] に置換しました。`,
                     purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
                     risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
-                    rec: "保護された内容で送信してよければ「承認」を、原文のまま送るなら「解除」を選択してください。"
-                }, true, (isConfirmed) => {
-                    if (isConfirmed) {
-                        // 伏せ字を適用して送信
+                    rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
+                }, true, (result) => { // ' 引数名を result に変更
+                    
+                    if (result === 'protected') {
+                        // 1. 保護して送信：伏せ字を適用して再クリック
                         if (inputField) {
                             if (inputField.tagName === 'DIV') inputField.innerText = shieldedText;
                             else inputField.value = shieldedText;
                         }
                         sendBtn.dataset.shieldVerified = "true";
                         sendBtn.click();
+                    } else if (result === 'raw') {
+                        // 2. 原文のまま送信：何もせず再クリック
+                        sendBtn.dataset.shieldVerified = "true";
+                        sendBtn.click();
                     }
+                    // ' result === 'cancel' の場合は何もしない（送信が止まったままになる）
                 });
             }
-        }, true); // Captureモードでイベントを先取りする
+        }, true);
     }
 }
 
+/**
+ * [Integrated] attachSubmitGuard
+ * 役割: HTTP通信時の送信をブロックする（既存機能の維持）
+ */
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
         const form = e.target;
@@ -605,11 +638,13 @@ function attachSubmitGuard() {
                 purpose: "【DSSI介入】 意図しない情報漏洩を防ぐため、送信を一時停止しました。",
                 risk: "【リスク】 送信内容は平文で流れるため、盗聴されるリスクが極めて高いです。",
                 rec: "本当に送信してよければ、「リスクを承知で送信」を押してください。"
-            }, true, (isConfirmed) => {
-                if (isConfirmed) {
+            }, true, (result) => {
+                // 返ってきたのが 'protected' または 'raw' なら送信許可
+                if (result === 'protected' || result === 'raw') {
                     const inputVal = form.querySelector("input")?.value || "(入力なし)";
                     const displayVal = inputVal.length > 20 ? inputVal.substring(0, 20) + "..." : inputVal;
                     showSubmissionToast(`✅ 送信を受け付けました。\n内容: ${displayVal}`);
+                    
                     setTimeout(() => {
                         form.dataset.dssiAllowed = "true";
                         if (form.requestSubmit) {
@@ -623,7 +658,8 @@ function attachSubmitGuard() {
                 }
             });
         } else {
-            if(confirm("【DSSI警告】\n暗号化されていない通信(HTTP)で送信しようとしています。\n盗聴のリスクがあります。本当に送信しますか？")) {
+            // 代替手段としての標準ダイアログ（既存ロジック）
+            if(confirm("【DSSI警告】\n暗号化されていない通信(HTTP)で送信しようとしています。本当に送信しますか？")) {
                 form.dataset.dssiAllowed = "true";
                 form.submit();
             }
@@ -642,14 +678,6 @@ function startGuard() {
         attachContentShield(); // Geminiなどは動的に要素が変わるので定期監視
     }, 2000);
 }
-
-// function startGuard() {
-//     if (guardInterval) return;
-//     console.log("🛡️ DSSI Guard: Enabled.");
-//     attachChips();
-//     attachSubmitGuard();
-//     guardInterval = setInterval(attachChips, 2000);
-// }
 
 function stopGuard() {
     if (!guardInterval && !document.querySelector('.dssi-observed-field')) return;
