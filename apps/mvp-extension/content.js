@@ -649,16 +649,11 @@ function resetGuards() {
 }
 
 function attachContentShield() {
-    // 1. セレクターを「部分一致 (*=)」に広げて、Geminiの微細な変化を許容する
     const sendBtn = document.querySelector('button[aria-label*="送信"], button[aria-label*="Send"], button[data-testid*="send"]');
     
-    if (!sendBtn) return;
-    if (sendBtn.dataset.shieldBound === "true") return;
-    
+    if (!sendBtn || sendBtn.dataset.shieldBound === "true") return;
     sendBtn.dataset.shieldBound = "true";
     
-    // 2. 「click」を「true (キャプチャフェーズ)」で奪い取る
-    // これにより、Google側のスクリプトが動く前にDSSIが割り込みます
     sendBtn.addEventListener('click', (e) => {
         if (sendBtn.dataset.shieldVerified === "true") {
             sendBtn.dataset.shieldVerified = "false"; 
@@ -670,10 +665,9 @@ function attachContentShield() {
         
         const { shieldedText, count } = applyShield(rawText);
 
-        // 判定：伏せ字があるなら、問答無用で止めてチップを出す
         if (count > 0) {
             e.preventDefault();
-            e.stopImmediatePropagation(); // 他のスクリプト（Google）への通知を完全に遮断
+            e.stopImmediatePropagation();
             e.stopPropagation();
 
             renderChip(sendBtn, {
@@ -685,6 +679,11 @@ function attachContentShield() {
                 rec: "保護して送信するか、原文で送るかを選択してください。"
             }, true, (result) => {
                 if (result === 'protected') {
+                    // ★ ここにログを追加！
+                    console.log("🛡️ DSSI 変換実行:");
+                    console.log("Original ->", rawText);
+                    console.log("Shielded ->", shieldedText);
+
                     if (inputField) {
                         inputField.innerText = shieldedText;
                         inputField.dispatchEvent(new Event('input', { bubbles: true }));
@@ -692,12 +691,13 @@ function attachContentShield() {
                     sendBtn.dataset.shieldVerified = "true";
                     sendBtn.click();
                 } else if (result === 'raw') {
+                    console.log("🛡️ DSSI 原文送信完了");
                     sendBtn.dataset.shieldVerified = "true";
                     sendBtn.click();
                 }
             });
         }
-    }, true); // ★ここを true にするのが、DSSIが先行する鍵です
+    }, true);
 }
 
 // 判定：実際に何が飛んだかを画面上で確認
