@@ -6,6 +6,29 @@
  * 哲学: "Facts over Fear." / "We do not substitute your thought."
  */
 
+// 🛡️ DSSI 専用スタイルをブラウザに強制注入
+(function() {
+    const style = document.createElement('style');
+    style.textContent = `
+        /* 復元された文字のスタイル */
+        .dssi-unmasked {
+            color: #00d1b2 !important; /* 鮮やかなターコイズブルー */
+            border-bottom: 2px dashed #00d1b2 !important;
+            background-color: rgba(0, 209, 178, 0.1) !important;
+            font-weight: bold !important;
+            padding: 0 2px !important;
+            border-radius: 3px !important;
+            cursor: help !important;
+        }
+        /* ポップアップが右に隠れないための補正 */
+        #dssi-chip {
+            z-index: 9999 !important;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+        }
+    `;
+    document.head.appendChild(style);
+    console.log("🛡️ DSSI Styles Injected.");
+})();
 console.log("🛡️ DSSI Guard: Loaded.");
 
 // 監視対象定義
@@ -486,7 +509,9 @@ function attachChips() {
 
 // 本来は chrome.storage から読み込むのが理想的
 const MY_SECRETS = {
-    "テスト": "[TEST_MASK]",
+    "クリエイター": "[TEST_MASK]",
+    "人工呼吸": "[FOOF001]",
+    "双子": "[FOOD002]",
     "清水克敏": "[PERSON_A]",
     "清水": "[PERSON_B]",
     "清水 克敏": "[PERSON_C]",
@@ -564,77 +589,169 @@ function resetGuards() {
     }, 100);
 }
 
-/**
- * 内容保護シールド（Content-Aware Shield）
- * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
- */
-function attachContentShield() {
-    // 1. まずボタンを探す
-    const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"], button[aria-label="送信"]');
+// /**
+//  * 内容保護シールド（Content-Aware Shield）
+//  * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
+//  */
+// function attachContentShield() {
+//     // 1. まずボタンを探す
+//     const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"], button[aria-label="送信"]');
     
-    // 2. ボタンが見つからなければ、何もしないで帰る
-    if (!sendBtn) return;
+//     // 2. ボタンが見つからなければ、何もしないで帰る
+//     if (!sendBtn) return;
 
-    // 3. すでに設定済みなら、何もしないで帰る
-    if (sendBtn.dataset.shieldBound === "true") return;
+//     // 3. すでに設定済みなら、何もしないで帰る
+//     if (sendBtn.dataset.shieldBound === "true") return;
     
-    // 4. 設定を開始する
-    sendBtn.dataset.shieldBound = "true";
+//     // 4. 設定を開始する
+//     sendBtn.dataset.shieldBound = "true";
     
-    sendBtn.addEventListener('click', (e) => {
-        // 5. 承認済みフラグのチェック
-        if (sendBtn.dataset.shieldVerified === "true") {
-            sendBtn.dataset.shieldVerified = "false"; // 次回のためにリセット
-            return;
-        }
+//     sendBtn.addEventListener('click', (e) => {
+//         // 5. 承認済みフラグのチェック
+//         if (sendBtn.dataset.shieldVerified === "true") {
+//             sendBtn.dataset.shieldVerified = "false"; // 次回のためにリセット
+//             return;
+//         }
 
-        // 6. 入力内容の取得
-        const inputField = document.querySelector('div[contenteditable="true"], textarea');
-        const rawText = inputField ? (inputField.innerText || inputField.value) : "";
+//         // 6. 入力内容の取得
+//         const inputField = document.querySelector('div[contenteditable="true"], textarea');
+//         const rawText = inputField ? (inputField.innerText || inputField.value) : "";
         
-        // 7. 伏せ字処理の実行
-        const { shieldedText, count } = applyShield(rawText);
+//         // 7. 伏せ字処理の実行
+//         const { shieldedText, count } = applyShield(rawText);
 
-        // 8. 伏せ字が発生した、あるいはレベル3の場合は確認を出す
-        const level = (typeof currentLevel !== "undefined") ? currentLevel : 2;
+//         // 8. 伏せ字が発生した、あるいはレベル3の場合は確認を出す
+//         const level = (typeof currentLevel !== "undefined") ? currentLevel : 2;
 
-        if (count > 0) {
+//         if (count > 0) {
+//             e.preventDefault();
+//             e.stopPropagation();
+
+//             renderChip(sendBtn, {
+//                 title: "🛡️ DSSI 内容保護シールド",
+//                 borderColor: "#3498db",
+//                 fact: `${count} 件の機密情報を保護対象として検知しました。`,
+//                 purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
+//                 risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
+//                 rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
+//             }, true, (result) => {
+//                 if (result === 'protected') {
+//                     if (inputField) {
+//                         inputField.focus();
+                        
+//                         // 【最優先】中身を完全に消去して、伏せ字のテキストノードだけを置く
+//                         inputField.innerHTML = ''; 
+//                         const textNode = document.createTextNode(shieldedText);
+//                         inputField.appendChild(textNode);
+
+//                         // Geminiのシステムに「中身が変わったぞ！」と強制的に分からせる
+//                         const events = ['input', 'change', 'blur', 'compositionend'];
+//                         events.forEach(type => {
+//                             inputField.dispatchEvent(new Event(type, { bubbles: true }));
+//                         });
+
+//                         // 0.1秒だけ待ってから、本物の送信ボタンを「物理的」にクリック
+//                         setTimeout(() => {
+//                             sendBtn.dataset.shieldVerified = "true";
+//                             sendBtn.click();
+//                         }, 100);
+//                     }
+//                     // if (inputField) {
+//                     //     inputField.focus();
+//                     //     // 1. 全選択して削除（Geminiの内部変数をクリアするため）
+//                     //     document.execCommand('selectAll', false, null);
+//                     //     document.execCommand('delete', false, null);
+//                     //     // 2. 伏せ字テキストを「物理的な入力」として挿入
+//                     //     document.execCommand('insertText', false, shieldedText);
+                        
+//                     //     // 3. 各種イベントを発生させて、Geminiに「文字が変わった」と確信させる
+//                     //     ['input', 'change', 'blur', 'keyup'].forEach(type => {
+//                     //         inputField.dispatchEvent(new Event(type, { bubbles: true }));
+//                     //     });
+//                     // }
+//                     // // 伏せ字後のテキストをコンソールに出力（デバッグ用）
+//                     // console.log("🛡️ DSSI: 送信テキストを保護しました。");
+//                     // console.log("Original -> ", rawText);
+//                     // console.log("Shielded -> ", shieldedText); // ★これで見れます！
+//                     // // 保護して送信
+//                     // if (inputField) {
+//                     //     if (inputField.tagName === 'DIV') {
+//                     //         inputField.innerText = shieldedText;
+//                     //         inputField.dispatchEvent(new Event('input', { bubbles: true }));
+//                     //         // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある                                                    // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある
+//                     //         inputField.dispatchEvent(new Event('compositionend', { bubbles: true })); // 確定させる
+//                     //     } else {
+//                     //         inputField.value = shieldedText;
+//                     //     }
+//                     // }
+//                     sendBtn.dataset.shieldVerified = "true";
+//                     sendBtn.click();
+//                 } else if (result === 'raw') {
+//                     // 原文のまま送信
+//                     sendBtn.dataset.shieldVerified = "true";
+//                     sendBtn.click();
+//                 }
+//             });
+//         }
+//     }, true);
+// }
+
+/**
+ * 送信ボタンにシールド機能を付与する（完全版）
+ */
+function attachContentShield(sendBtn, inputField) {
+    if (sendBtn.dataset.dssiAttached) return;
+    sendBtn.dataset.dssiAttached = "true";
+
+    // 「キャプチャモード（true）」でイベントを待ち伏せする
+    sendBtn.addEventListener('click', function(e) {
+        // もしDSSIの承認が終わっていないなら、Geminiの処理を一切動かさない
+        if (sendBtn.dataset.shieldVerified !== "true") {
+            // Gemini側の送信処理を完全に停止
             e.preventDefault();
-            e.stopPropagation();
+            e.stopImmediatePropagation();
 
-            renderChip(sendBtn, {
-                title: "🛡️ DSSI 内容保護シールド",
-                borderColor: "#3498db",
-                fact: `${count} 件の機密情報を保護対象として検知しました。`,
-                purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
-                risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
-                rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
-            }, true, (result) => {
-                if (result === 'protected') {
-                    // 伏せ字後のテキストをコンソールに出力（デバッグ用）
-                    console.log("🛡️ DSSI: 送信テキストを保護しました。");
-                    console.log("Original -> ", rawText);
-                    console.log("Shielded -> ", shieldedText); // ★これで見れます！
-                    // 保護して送信
-                    if (inputField) {
-                        if (inputField.tagName === 'DIV') {
-                            inputField.innerText = shieldedText;
-                            // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある
-                            inputField.dispatchEvent(new Event('input', { bubbles: true }));
-                        } else {
-                            inputField.value = shieldedText;
-                        }
+            const rawText = inputField.innerText;
+            const { shieldedText, maskCount } = applyShield(rawText);
+
+            // 検知された場合のみポップアップを出す
+            if (maskCount > 0) {
+                renderChip(sendBtn, {
+                    title: "🛡️ DSSI 内容保護シールド",
+                    body: `${maskCount} 件の機密情報を検知しました。伏せ字にして送信しますか？`,
+                    protectedLabel: "🛡️ 保護して送信",
+                    rawLabel: "原文のまま送信"
+                }, true, (result) => {
+                    if (result === 'protected') {
+                        // 【物理書き換え】入力欄の中身を伏せ字に置き換える
+                        inputField.focus();
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('insertText', false, shieldedText);
+
+                        // Geminiに「入力が変わった」ことを通知
+                        ['input', 'change', 'compositionend'].forEach(type => {
+                            inputField.dispatchEvent(new Event(type, { bubbles: true }));
+                        });
+
+                        // 承認フラグを立てて、0.1秒後に再クリック
+                        sendBtn.dataset.shieldVerified = "true";
+                        setTimeout(() => sendBtn.click(), 100);
+                    } else if (result === 'raw') {
+                        // 原文で送る場合もフラグを立てて再クリック
+                        sendBtn.dataset.shieldVerified = "true";
+                        sendBtn.click();
                     }
-                    sendBtn.dataset.shieldVerified = "true";
-                    sendBtn.click();
-                } else if (result === 'raw') {
-                    // 原文のまま送信
-                    sendBtn.dataset.shieldVerified = "true";
-                    sendBtn.click();
-                }
-            });
+                });
+            } else {
+                // 検知ゼロならそのまま送信（フラグを立てて再実行）
+                sendBtn.dataset.shieldVerified = "true";
+                sendBtn.click();
+            }
+        } else {
+            // 承認済みならフラグを消して、Gemini本来の送信処理へ通す
+            delete sendBtn.dataset.shieldVerified;
         }
-    }, true);
+    }, true); // ← この true が、Geminiより先にイベントを捕まえる鍵です
 }
 
 /**
@@ -749,3 +866,137 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
     }
 });
+
+/**
+ * AIの回答内の伏せ字を元の名前に復元する
+ */
+function reverseShield(node) {
+    let replaced = false;
+    let text = node.innerHTML;
+
+    for (const [realName, placeholder] of Object.entries(MY_SECRETS)) {
+        if (!realName || !text.includes(placeholder)) continue;
+
+        // 見た目だけ復元（DSSIが戻したことがわかるよう、薄い青色などの装飾を推奨）
+        const re = new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        text = text.replace(re, `<span class="dssi-unmasked" style="color: #3498db; border-bottom: 1px dotted;" title="DSSIが原文を復元しました">${realName}</span>`);
+        replaced = true;
+    }
+
+    if (replaced) node.innerHTML = text;
+}
+
+/**
+ * 【受信保護】AIの回答内の伏せ字を元の名前に復元する
+ */
+function reverseShield(node) {
+    let replaced = false;
+    // nodeがテキストを含まない場合はスキップ
+    if (!node.innerHTML) return;
+    
+    let html = node.innerHTML;
+
+    for (const [realName, placeholder] of Object.entries(MY_SECRETS)) {
+        if (!realName || !placeholder) continue;
+        
+        // 伏せ字が含まれているかチェック
+        if (html.includes(placeholder)) {
+            // 正規表現で全置換。DSSIが戻したことがわかるようスタイルを適用
+            const re = new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+            html = html.replace(re, `<span class="dssi-unmasked" 
+                style="color: #3498db; border-bottom: 1px dotted #3498db; cursor: help;" 
+                title="DSSIが原文 '${realName}' を復元しました">${realName}</span>`);
+            replaced = true;
+        }
+    }
+
+    if (replaced) {
+        node.innerHTML = html;
+        console.log("🛡️ DSSI: 伏せ字を復元しました。");
+    }
+}
+
+/**
+ * Geminiの回答エリアを監視し、新しいメッセージが出たら復元を実行
+ */
+const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+        mutation.addedNodes.forEach(node => {
+            if (node.nodeType === 1) { // 要素ノードのみ対象
+                // Geminiの回答テキストが入る可能性のある要素をすべてスキャン
+                const targets = node.querySelectorAll('.message-content, .markdown, [role="presentation"], div[data-message-author-role="assistant"]');
+                if (targets.length > 0) {
+                    targets.forEach(reverseShield);
+                } else if (node.classList.contains('markdown') || node.getAttribute('data-message-author-role') === 'assistant') {
+                    reverseShield(node);
+                }
+            }
+        });
+    }
+});
+
+// 監視の開始（body全体を監視して、回答が追加されるのを待ち構える）
+observer.observe(document.body, { childList: true, subtree: true });
+
+// /**
+//  * 🛡️ DSSI 最終兵器：パケット・インターセプター
+//  * ブラウザから送信される直前のデータを捕まえて、強制的に伏せ字にする
+//  */
+// const originalFetch = window.fetch;
+// window.fetch = async (...args) => {
+//     let [resource, config] = args;
+
+//     // 通信データ（body）が存在し、文字列である場合のみ処理
+//     if (config && config.body && typeof config.body === 'string') {
+//         try {
+//             let shieldedBody = config.body;
+//             let isModified = false;
+
+//             // 辞書（MY_SECRETS）をループして、パケット内を全スキャン
+//             for (const [realName, mask] of Object.entries(MY_SECRETS)) {
+//                 if (!realName) continue;
+                
+//                 // パケット内に実名が含まれていたら、容赦なく伏せ字に置換
+//                 if (shieldedBody.includes(realName)) {
+//                     const re = new RegExp(realName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+//                     shieldedBody = shieldedBody.replace(re, mask);
+//                     isModified = true;
+//                 }
+//             }
+
+//             if (isModified) {
+//                 console.log("🛡️ DSSI Packet Guard: 送信パケットを伏せ字に書き換えました。");
+//                 config.body = shieldedBody;
+//             }
+//         } catch (err) {
+//             console.error("DSSI Packet Guard Error:", err);
+//         }
+//     }
+//     return originalFetch(resource, config);
+// };
+
+// /**
+//  * 🛡️ DSSI 最終兵器 第2弾：XHRインターセプター
+//  * XMLHttpRequest (XHR) による送信も強制的に伏せ字化する
+//  */
+// const originalXHRSend = window.XMLHttpRequest.prototype.send;
+// window.XMLHttpRequest.prototype.send = function(body) {
+//     if (typeof body === 'string') {
+//         let shieldedBody = body;
+//         let isModified = false;
+
+//         for (const [realName, mask] of Object.entries(MY_SECRETS)) {
+//             if (realName && shieldedBody.includes(realName)) {
+//                 const re = new RegExp(realName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+//                 shieldedBody = shieldedBody.replace(re, mask);
+//                 isModified = true;
+//             }
+//         }
+
+//         if (isModified) {
+//             console.log("🛡️ DSSI XHR Guard: 送信データを保護しました。");
+//             arguments[0] = shieldedBody; // 送信データを書き換える
+//         }
+//     }
+//     return originalXHRSend.apply(this, arguments);
+// };
