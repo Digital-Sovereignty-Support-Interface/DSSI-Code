@@ -265,14 +265,20 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
     `;
     document.body.appendChild(chip);
 
-    const updatePosition = () => {
+        const updatePosition = () => {
         const rect = field.getBoundingClientRect();
         const scrollY = window.scrollY || window.pageYOffset;
         const scrollX = window.scrollX || window.pageXOffset;
+        
         let top = rect.top + scrollY - chip.offsetHeight - 10;
         if (top < scrollY) top = rect.bottom + scrollY + 10;
+        
+        // ★ 修正：左端を少し左にずらす (例: -300px) か、中央寄せを検討
+        let left = rect.left + scrollX - 300; 
+        if (left < 10) left = 10; // 画面左端に突き抜けないようガード
+        
         chip.style.top = `${top}px`;
-        chip.style.left = `${rect.left + scrollX}px`;
+        chip.style.left = `${left}px`;
     };
 
     const cleanupFns = [];
@@ -480,7 +486,7 @@ function attachChips() {
 
 // 本来は chrome.storage から読み込むのが理想的
 const MY_SECRETS = {
-    "テスト": "[TEST_MASK]"
+    "テスト": "[TEST_MASK]",
     "清水克敏": "[PERSON_A]",
     "清水": "[PERSON_B]",
     "清水 克敏": "[PERSON_C]",
@@ -563,55 +569,72 @@ function resetGuards() {
  * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
  */
 function attachContentShield() {
-    console.log("Send button found:", sendBtn);
-    const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"]');
+    // 1. まずボタンを探す
+    const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"], button[aria-label="送信"]');
     
-    if (sendBtn && !sendBtn.dataset.shieldBound) {
-        sendBtn.dataset.shieldBound = "true";
+    // 2. ボタンが見つからなければ、何もしないで帰る
+    if (!sendBtn) return;
+
+    // 3. すでに設定済みなら、何もしないで帰る
+    if (sendBtn.dataset.shieldBound === "true") return;
+    
+    // 4. 設定を開始する
+    sendBtn.dataset.shieldBound = "true";
+    
+    sendBtn.addEventListener('click', (e) => {
+        // 5. 承認済みフラグのチェック
+        if (sendBtn.dataset.shieldVerified === "true") {
+            sendBtn.dataset.shieldVerified = "false"; // 次回のためにリセット
+            return;
+        }
+
+        // 6. 入力内容の取得
+        const inputField = document.querySelector('div[contenteditable="true"], textarea');
+        const rawText = inputField ? (inputField.innerText || inputField.value) : "";
         
-        sendBtn.addEventListener('click', (e) => {
-            if (sendBtn.dataset.shieldVerified === "true") {
-                sendBtn.dataset.shieldVerified = "false";
-                return;
-            }
+        // 7. 伏せ字処理の実行
+        const { shieldedText, count } = applyShield(rawText);
 
-            const inputField = document.querySelector('div[contenteditable="true"], textarea');
-            const rawText = inputField ? (inputField.innerText || inputField.value) : "";
-            
-            const { shieldedText, count } = applyShield(rawText); // ' replacedCount を count に修正（applyShieldの戻り値に合わせる）
+        // 8. 伏せ字が発生した、あるいはレベル3の場合は確認を出す
+        const level = (typeof currentLevel !== "undefined") ? currentLevel : 2;
 
-            // 伏せ字が発生した、あるいはレベル3の場合は確認を出す
-            if (count > 0 || (typeof currentLevel !== "undefined" && currentLevel === 3)) {
-                e.preventDefault();
-                e.stopPropagation();
+        if (count > 0) {
+            e.preventDefault();
+            e.stopPropagation();
 
-                renderChip(sendBtn, {
-                    title: "🛡️ DSSI 内容保護シールド",
-                    borderColor: "#3498db",
-                    fact: `${count} 件の機密情報を [MASK] に置換しました。`,
-                    purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
-                    risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
-                    rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
-                }, true, (result) => { // ' 引数名を result に変更
-                    
-                    if (result === 'protected') {
-                        // 1. 保護して送信：伏せ字を適用して再クリック
-                        if (inputField) {
-                            if (inputField.tagName === 'DIV') inputField.innerText = shieldedText;
-                            else inputField.value = shieldedText;
+            renderChip(sendBtn, {
+                title: "🛡️ DSSI 内容保護シールド",
+                borderColor: "#3498db",
+                fact: `${count} 件の機密情報を保護対象として検知しました。`,
+                purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
+                risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
+                rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
+            }, true, (result) => {
+                if (result === 'protected') {
+                    // 伏せ字後のテキストをコンソールに出力（デバッグ用）
+                    console.log("🛡️ DSSI: 送信テキストを保護しました。");
+                    console.log("Original -> ", rawText);
+                    console.log("Shielded -> ", shieldedText); // ★これで見れます！
+                    // 保護して送信
+                    if (inputField) {
+                        if (inputField.tagName === 'DIV') {
+                            inputField.innerText = shieldedText;
+                            // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある
+                            inputField.dispatchEvent(new Event('input', { bubbles: true }));
+                        } else {
+                            inputField.value = shieldedText;
                         }
-                        sendBtn.dataset.shieldVerified = "true";
-                        sendBtn.click();
-                    } else if (result === 'raw') {
-                        // 2. 原文のまま送信：何もせず再クリック
-                        sendBtn.dataset.shieldVerified = "true";
-                        sendBtn.click();
                     }
-                    // ' result === 'cancel' の場合は何もしない（送信が止まったままになる）
-                });
-            }
-        }, true);
-    }
+                    sendBtn.dataset.shieldVerified = "true";
+                    sendBtn.click();
+                } else if (result === 'raw') {
+                    // 原文のまま送信
+                    sendBtn.dataset.shieldVerified = "true";
+                    sendBtn.click();
+                }
+            });
+        }
+    }, true);
 }
 
 /**
