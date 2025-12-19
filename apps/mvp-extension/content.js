@@ -589,169 +589,122 @@ function resetGuards() {
     }, 100);
 }
 
-// /**
-//  * 内容保護シールド（Content-Aware Shield）
-//  * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
-//  */
-// function attachContentShield() {
-//     // 1. まずボタンを探す
-//     const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"], button[aria-label="送信"]');
-    
-//     // 2. ボタンが見つからなければ、何もしないで帰る
-//     if (!sendBtn) return;
-
-//     // 3. すでに設定済みなら、何もしないで帰る
-//     if (sendBtn.dataset.shieldBound === "true") return;
-    
-//     // 4. 設定を開始する
-//     sendBtn.dataset.shieldBound = "true";
-    
-//     sendBtn.addEventListener('click', (e) => {
-//         // 5. 承認済みフラグのチェック
-//         if (sendBtn.dataset.shieldVerified === "true") {
-//             sendBtn.dataset.shieldVerified = "false"; // 次回のためにリセット
-//             return;
-//         }
-
-//         // 6. 入力内容の取得
-//         const inputField = document.querySelector('div[contenteditable="true"], textarea');
-//         const rawText = inputField ? (inputField.innerText || inputField.value) : "";
-        
-//         // 7. 伏せ字処理の実行
-//         const { shieldedText, count } = applyShield(rawText);
-
-//         // 8. 伏せ字が発生した、あるいはレベル3の場合は確認を出す
-//         const level = (typeof currentLevel !== "undefined") ? currentLevel : 2;
-
-//         if (count > 0) {
-//             e.preventDefault();
-//             e.stopPropagation();
-
-//             renderChip(sendBtn, {
-//                 title: "🛡️ DSSI 内容保護シールド",
-//                 borderColor: "#3498db",
-//                 fact: `${count} 件の機密情報を保護対象として検知しました。`,
-//                 purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
-//                 risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
-//                 rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
-//             }, true, (result) => {
-//                 if (result === 'protected') {
-//                     if (inputField) {
-//                         inputField.focus();
-                        
-//                         // 【最優先】中身を完全に消去して、伏せ字のテキストノードだけを置く
-//                         inputField.innerHTML = ''; 
-//                         const textNode = document.createTextNode(shieldedText);
-//                         inputField.appendChild(textNode);
-
-//                         // Geminiのシステムに「中身が変わったぞ！」と強制的に分からせる
-//                         const events = ['input', 'change', 'blur', 'compositionend'];
-//                         events.forEach(type => {
-//                             inputField.dispatchEvent(new Event(type, { bubbles: true }));
-//                         });
-
-//                         // 0.1秒だけ待ってから、本物の送信ボタンを「物理的」にクリック
-//                         setTimeout(() => {
-//                             sendBtn.dataset.shieldVerified = "true";
-//                             sendBtn.click();
-//                         }, 100);
-//                     }
-//                     // if (inputField) {
-//                     //     inputField.focus();
-//                     //     // 1. 全選択して削除（Geminiの内部変数をクリアするため）
-//                     //     document.execCommand('selectAll', false, null);
-//                     //     document.execCommand('delete', false, null);
-//                     //     // 2. 伏せ字テキストを「物理的な入力」として挿入
-//                     //     document.execCommand('insertText', false, shieldedText);
-                        
-//                     //     // 3. 各種イベントを発生させて、Geminiに「文字が変わった」と確信させる
-//                     //     ['input', 'change', 'blur', 'keyup'].forEach(type => {
-//                     //         inputField.dispatchEvent(new Event(type, { bubbles: true }));
-//                     //     });
-//                     // }
-//                     // // 伏せ字後のテキストをコンソールに出力（デバッグ用）
-//                     // console.log("🛡️ DSSI: 送信テキストを保護しました。");
-//                     // console.log("Original -> ", rawText);
-//                     // console.log("Shielded -> ", shieldedText); // ★これで見れます！
-//                     // // 保護して送信
-//                     // if (inputField) {
-//                     //     if (inputField.tagName === 'DIV') {
-//                     //         inputField.innerText = shieldedText;
-//                     //         inputField.dispatchEvent(new Event('input', { bubbles: true }));
-//                     //         // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある                                                    // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある
-//                     //         inputField.dispatchEvent(new Event('compositionend', { bubbles: true })); // 確定させる
-//                     //     } else {
-//                     //         inputField.value = shieldedText;
-//                     //     }
-//                     // }
-//                     sendBtn.dataset.shieldVerified = "true";
-//                     sendBtn.click();
-//                 } else if (result === 'raw') {
-//                     // 原文のまま送信
-//                     sendBtn.dataset.shieldVerified = "true";
-//                     sendBtn.click();
-//                 }
-//             });
-//         }
-//     }, true);
-// }
-
-/**
- * 送信ボタンにシールド機能を付与する（完全版）
- */
 function attachContentShield(sendBtn, inputField) {
-    if (sendBtn.dataset.dssiAttached) return;
-    sendBtn.dataset.dssiAttached = "true";
-
-    // 「キャプチャモード（true）」でイベントを待ち伏せする
-    sendBtn.addEventListener('click', function(e) {
-        // もしDSSIの承認が終わっていないなら、Geminiの処理を一切動かさない
+    setInterval(() => {
+        // 承認フラグが立っていない時だけ、強制書き換えを回し続ける
         if (sendBtn.dataset.shieldVerified !== "true") {
-            // Gemini側の送信処理を完全に停止
-            e.preventDefault();
-            e.stopImmediatePropagation();
-
             const rawText = inputField.innerText;
             const { shieldedText, maskCount } = applyShield(rawText);
 
-            // 検知された場合のみポップアップを出す
+            // もしNGワードが1つでも含まれていたら、その場で「[TEST_MASK]」に置換
             if (maskCount > 0) {
-                renderChip(sendBtn, {
-                    title: "🛡️ DSSI 内容保護シールド",
-                    body: `${maskCount} 件の機密情報を検知しました。伏せ字にして送信しますか？`,
-                    protectedLabel: "🛡️ 保護して送信",
-                    rawLabel: "原文のまま送信"
-                }, true, (result) => {
-                    if (result === 'protected') {
-                        // 【物理書き換え】入力欄の中身を伏せ字に置き換える
-                        inputField.focus();
-                        document.execCommand('selectAll', false, null);
-                        document.execCommand('insertText', false, shieldedText);
-
-                        // Geminiに「入力が変わった」ことを通知
-                        ['input', 'change', 'compositionend'].forEach(type => {
-                            inputField.dispatchEvent(new Event(type, { bubbles: true }));
-                        });
-
-                        // 承認フラグを立てて、0.1秒後に再クリック
-                        sendBtn.dataset.shieldVerified = "true";
-                        setTimeout(() => sendBtn.click(), 100);
-                    } else if (result === 'raw') {
-                        // 原文で送る場合もフラグを立てて再クリック
-                        sendBtn.dataset.shieldVerified = "true";
-                        sendBtn.click();
-                    }
-                });
-            } else {
-                // 検知ゼロならそのまま送信（フラグを立てて再実行）
-                sendBtn.dataset.shieldVerified = "true";
-                sendBtn.click();
+                // 物理的にDOMを書き換え
+                inputField.innerText = shieldedText;
+                
+                // ポップアップを出し、ユーザーに「今、強制的に伏せ字にしたよ」と知らせる
+                // (既にある renderChip 処理へ誘導)
             }
-        } else {
-            // 承認済みならフラグを消して、Gemini本来の送信処理へ通す
-            delete sendBtn.dataset.shieldVerified;
         }
-    }, true); // ← この true が、Geminiより先にイベントを捕まえる鍵です
+    }, 100); // 0.1秒周期
+    // 入力欄の「中身の変化」を、イベントを介さず監視する（MutationObserver）
+    const observer = new MutationObserver(() => {
+        const rawText = inputField.innerText;
+        
+        // 改行コード（Enter送信の兆候）が含まれているかチェック
+        if (rawText.includes('\n') || rawText.includes('\r')) {
+            const { shieldedText, maskCount } = applyShield(rawText);
+            
+            if (maskCount > 0 && sendBtn.dataset.shieldVerified !== "true") {
+                // ★ここで強制的に中身を伏せ字に上書き！
+                // Geminiがパケットを作る「材料」を物理的に奪い取ります
+                inputField.innerText = shieldedText;
+                
+                // この後、ポップアップを出して「本当に送るか」を確認する
+                // （既に送信が走ってしまっていても、サーバーに届くのは伏せ字です）
+            }
+        }
+    });
+    observer.observe(inputField, { childList: true, characterData: true, subtree: true });
+
+    if (sendBtn.dataset.dssiAttached) return;
+    sendBtn.dataset.dssiAttached = "true";
+
+    // 1. Geminiの純正ボタンを透明にして、操作不能にする
+    sendBtn.style.position = 'relative';
+    
+    // 2. DSSI専用の「透明なカバーボタン」を作成して上に被せる
+    const coverBtn = document.createElement('div');
+    coverBtn.style.cssText = `
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        z-index: 9999; cursor: pointer;
+    `;
+    sendBtn.appendChild(coverBtn);
+
+    // 3. カバーボタンがクリックされたらDSSIの処理を開始
+    coverBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const rawText = inputField.innerText;
+        const { shieldedText, maskCount } = applyShield(rawText);
+
+        if (maskCount > 0) {
+            renderChip(sendBtn, {
+                title: "🛡️ DSSI 内容保護シールド",
+                body: `${maskCount} 件の機密情報を検知しました。`,
+                protectedLabel: "🛡️ 保護して送信",
+                rawLabel: "原文のまま送信"
+            }, true, (result) => {
+                if (result === 'protected') {
+                    // 入力欄を物理的に書き換え
+                    inputField.focus();
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('insertText', false, shieldedText);
+                    
+                    // Geminiに通知
+                    ['input', 'change'].forEach(t => inputField.dispatchEvent(new Event(t, { bubbles: true })));
+
+                    // カバーを一時的に外して、本物のボタンをクリック
+                    coverBtn.style.display = 'none';
+                    setTimeout(() => {
+                        sendBtn.click();
+                        coverBtn.style.display = 'block'; // 次回のために戻す
+                    }, 100);
+                } else if (result === 'raw') {
+                    coverBtn.style.display = 'none';
+                    sendBtn.click();
+                    setTimeout(() => { coverBtn.style.display = 'block'; }, 100);
+                }
+            });
+        } else {
+            // 検知なしならそのまま送信
+            coverBtn.style.display = 'none';
+            sendBtn.click();
+            setTimeout(() => { coverBtn.style.display = 'block'; }, 100);
+        }
+    });
+    /**
+     * 入力欄（inputField）に対するEnterキー送信のブロック
+     */
+    inputField.addEventListener('keydown', (e) => {
+        // Enterキーが押され、かつ変換中（IME）でない場合
+        if (e.key === 'Enter' && !e.isComposing) {
+            // Shift + Enter などの改行目的でない場合のみ発動
+            if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                
+                // 承認済みフラグがないなら、送信を止めてポップアップを出す
+                if (sendBtn.dataset.shieldVerified !== "true") {
+                    e.preventDefault(); // Geminiの送信処理を止める
+                    e.stopImmediatePropagation();
+
+                    // ボタンのクリックイベントとして擬似的に処理を開始させる
+                    // これにより、既存のポップアップロジックが動きます
+                    sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    return false;
+                }
+            }
+        }
+    }, true); // true (キャプチャモード) でGeminiより先に捕まえる
 }
 
 /**
