@@ -590,121 +590,69 @@ function resetGuards() {
 }
 
 function attachContentShield(sendBtn, inputField) {
-    setInterval(() => {
-        // 承認フラグが立っていない時だけ、強制書き換えを回し続ける
-        if (sendBtn.dataset.shieldVerified !== "true") {
-            const rawText = inputField.innerText;
-            const { shieldedText, maskCount } = applyShield(rawText);
-
-            // もしNGワードが1つでも含まれていたら、その場で「[TEST_MASK]」に置換
-            if (maskCount > 0) {
-                // 物理的にDOMを書き換え
-                inputField.innerText = shieldedText;
-                
-                // ポップアップを出し、ユーザーに「今、強制的に伏せ字にしたよ」と知らせる
-                // (既にある renderChip 処理へ誘導)
-            }
-        }
-    }, 100); // 0.1秒周期
-    // 入力欄の「中身の変化」を、イベントを介さず監視する（MutationObserver）
-    const observer = new MutationObserver(() => {
-        const rawText = inputField.innerText;
-        
-        // 改行コード（Enter送信の兆候）が含まれているかチェック
-        if (rawText.includes('\n') || rawText.includes('\r')) {
-            const { shieldedText, maskCount } = applyShield(rawText);
-            
-            if (maskCount > 0 && sendBtn.dataset.shieldVerified !== "true") {
-                // ★ここで強制的に中身を伏せ字に上書き！
-                // Geminiがパケットを作る「材料」を物理的に奪い取ります
-                inputField.innerText = shieldedText;
-                
-                // この後、ポップアップを出して「本当に送るか」を確認する
-                // （既に送信が走ってしまっていても、サーバーに届くのは伏せ字です）
-            }
-        }
-    });
-    observer.observe(inputField, { childList: true, characterData: true, subtree: true });
-
     if (sendBtn.dataset.dssiAttached) return;
     sendBtn.dataset.dssiAttached = "true";
 
-    // 1. Geminiの純正ボタンを透明にして、操作不能にする
-    sendBtn.style.position = 'relative';
-    
-    // 2. DSSI専用の「透明なカバーボタン」を作成して上に被せる
-    const coverBtn = document.createElement('div');
-    coverBtn.style.cssText = `
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        z-index: 9999; cursor: pointer;
-    `;
-    sendBtn.appendChild(coverBtn);
-
-    // 3. カバーボタンがクリックされたらDSSIの処理を開始
-    coverBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
+    // 【1】 共通の検閲＆「毒入れ」ロジック
+    // ポップアップが出る前に、入力欄を物理的に伏せ字に強制変換する
+    const runDssiLogic = () => {
         const rawText = inputField.innerText;
         const { shieldedText, maskCount } = applyShield(rawText);
 
-        if (maskCount > 0) {
+        if (maskCount > 0 && sendBtn.dataset.shieldVerified !== "true") {
+            // Geminiがパケットを作る前に、入力欄を伏せ字で「物理的に破壊」して上書き
+            inputField.focus();
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, shieldedText);
+            
+            // Geminiに「中身が変わったぞ」と強制的に分からせる
+            ['input', 'change', 'compositionend'].forEach(t => 
+                inputField.dispatchEvent(new Event(t, { bubbles: true }))
+            );
+
+            // ここでようやくポップアップを出して、最終確認
             renderChip(sendBtn, {
                 title: "🛡️ DSSI 内容保護シールド",
-                body: `${maskCount} 件の機密情報を検知しました。`,
-                protectedLabel: "🛡️ 保護して送信",
-                rawLabel: "原文のまま送信"
+                body: `${maskCount} 件の機密情報を検知しました。伏せ字で送信します。`,
+                protectedLabel: "🛡️ 送信を承認",
+                rawLabel: "キャンセル"
             }, true, (result) => {
                 if (result === 'protected') {
-                    // 入力欄を物理的に書き換え
-                    inputField.focus();
-                    document.execCommand('selectAll', false, null);
-                    document.execCommand('insertText', false, shieldedText);
-                    
-                    // Geminiに通知
-                    ['input', 'change'].forEach(t => inputField.dispatchEvent(new Event(t, { bubbles: true })));
-
-                    // カバーを一時的に外して、本物のボタンをクリック
-                    coverBtn.style.display = 'none';
-                    setTimeout(() => {
-                        sendBtn.click();
-                        coverBtn.style.display = 'block'; // 次回のために戻す
-                    }, 100);
-                } else if (result === 'raw') {
-                    coverBtn.style.display = 'none';
+                    // すでに伏せ字になっているので、そのまま送信
+                    sendBtn.dataset.shieldVerified = "true";
                     sendBtn.click();
-                    setTimeout(() => { coverBtn.style.display = 'block'; }, 100);
+                    setTimeout(() => delete sendBtn.dataset.shieldVerified, 500);
                 }
+                // キャンセルの場合はそのまま何もしない（入力欄は伏せ字のまま残る）
             });
-        } else {
-            // 検知なしならそのまま送信
-            coverBtn.style.display = 'none';
-            sendBtn.click();
-            setTimeout(() => { coverBtn.style.display = 'block'; }, 100);
+            return true; // シールド発動
         }
-    });
-    /**
-     * 入力欄（inputField）に対するEnterキー送信のブロック
-     */
-    inputField.addEventListener('keydown', (e) => {
-        // Enterキーが押され、かつ変換中（IME）でない場合
-        if (e.key === 'Enter' && !e.isComposing) {
-            // Shift + Enter などの改行目的でない場合のみ発動
-            if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                
-                // 承認済みフラグがないなら、送信を止めてポップアップを出す
-                if (sendBtn.dataset.shieldVerified !== "true") {
-                    e.preventDefault(); // Geminiの送信処理を止める
-                    e.stopImmediatePropagation();
+        return false; // シールド不要
+    };
 
-                    // ボタンのクリックイベントとして擬似的に処理を開始させる
-                    // これにより、既存のポップアップロジックが動きます
-                    sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    return false;
-                }
+    // 【2】 裏口（Enterキー）を最速で封鎖
+    // clickイベントより先に発生するkeydownをキャプチャモードで捕まえる
+    inputField.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            if (sendBtn.dataset.shieldVerified !== "true") {
+                // Geminiの送信処理を完全に握りつぶす
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                
+                runDssiLogic(); // 即座に検閲ロジックへ
+                return false;
             }
         }
-    }, true); // true (キャプチャモード) でGeminiより先に捕まえる
+    }, true);
+
+    // 【3】 正門（送信ボタン）も「触れた瞬間」に制圧
+    sendBtn.addEventListener('mousedown', (e) => {
+        if (sendBtn.dataset.shieldVerified !== "true") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            runDssiLogic();
+        }
+    }, true);
 }
 
 /**
