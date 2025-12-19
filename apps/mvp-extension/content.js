@@ -30,6 +30,65 @@
     console.log("🛡️ DSSI Styles Injected.");
 })();
 console.log("🛡️ DSSI Guard: Loaded.");
+/**
+ * DSSI 通信解剖モジュール (Traffic Analyzer)
+ * 目的: Geminiが[FOOD002]という伏せ字をどう扱っているか、裏側の通信を可視化する。
+ */
+const DSSI_PROBE = {
+    flags: {
+        fetchUsed: false,
+        xhrUsed: false,
+        binaryDetected: false,
+        streamingDetected: false
+    }
+};
+
+// 1. Fetch(フェッチ)の乗っ取り
+const originalFetch = window.fetch;
+window.fetch = async (...args) => {
+    DSSI_PROBE.flags.fetchUsed = true;
+    const url = args[0].toString();
+    
+    // Geminiの通信っぽいものだけを狙い撃ち
+    if (url.includes("google.internal") || url.includes("ChatService")) {
+        console.log("📡 [DSSI-Fetch]:", url);
+        
+        // ボディがバイナリかチェック
+        if (args[1]?.body instanceof Uint8Array || args[1]?.body instanceof ArrayBuffer) {
+            DSSI_PROBE.flags.binaryDetected = true;
+            console.warn("⚠️ [DSSI-Alert]: バイナリ(Protobuf可能)な通信を検知！");
+        }
+    }
+    return originalFetch(...args);
+};
+
+// 2. XMLHttpRequest(XML通信)の乗っ取り
+const originalXHR = window.XMLHttpRequest.prototype.open;
+window.XMLHttpRequest.prototype.open = function(method, url) {
+    DSSI_PROBE.flags.xhrUsed = true;
+    this._url = url;
+    console.log(`📨 [DSSI-XHR]: ${method} ${url}`);
+    
+    const originalSend = this.send;
+    this.send = function(data) {
+        if (data instanceof ArrayBuffer || data instanceof Blob) {
+            DSSI_PROBE.flags.binaryDetected = true;
+            console.warn("⚠️ [DSSI-Alert]: XHR経由のバイナリ送信を検知！");
+        }
+        return originalSend.apply(this, arguments);
+    };
+    
+    return originalXHR.apply(this, arguments);
+};
+
+// 3. 通信状況をチップに反映させるための関数
+function getTrafficStatus() {
+    let status = "【通信解析】: ";
+    if (DSSI_PROBE.flags.binaryDetected) status += "👾バイナリ ";
+    if (DSSI_PROBE.flags.fetchUsed) status += "🌐Fetch ";
+    if (DSSI_PROBE.flags.xhrUsed) status += "✉️XHR ";
+    return status || "【通信解析】: 待機中...";
+}
 
 // 監視対象定義
 const SELECTORS_ALL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea';
@@ -589,70 +648,91 @@ function resetGuards() {
     }, 100);
 }
 
-function attachContentShield(sendBtn, inputField) {
-    if (sendBtn.dataset.dssiAttached) return;
-    sendBtn.dataset.dssiAttached = "true";
+function attachContentShield() {
+    // 1. セレクターを「部分一致 (*=)」に広げて、Geminiの微細な変化を許容する
+    const sendBtn = document.querySelector('button[aria-label*="送信"], button[aria-label*="Send"], button[data-testid*="send"]');
+    
+    if (!sendBtn) return;
+    if (sendBtn.dataset.shieldBound === "true") return;
+    
+    sendBtn.dataset.shieldBound = "true";
+    
+    // 2. 「click」を「true (キャプチャフェーズ)」で奪い取る
+    // これにより、Google側のスクリプトが動く前にDSSIが割り込みます
+    sendBtn.addEventListener('click', (e) => {
+        if (sendBtn.dataset.shieldVerified === "true") {
+            sendBtn.dataset.shieldVerified = "false"; 
+            return;
+        }
 
-    // 【1】 共通の検閲＆「毒入れ」ロジック
-    // ポップアップが出る前に、入力欄を物理的に伏せ字に強制変換する
-    const runDssiLogic = () => {
-        const rawText = inputField.innerText;
-        const { shieldedText, maskCount } = applyShield(rawText);
+        const inputField = document.querySelector('div[contenteditable="true"], textarea');
+        const rawText = inputField ? (inputField.innerText || inputField.value) : "";
+        
+        const { shieldedText, count } = applyShield(rawText);
 
-        if (maskCount > 0 && sendBtn.dataset.shieldVerified !== "true") {
-            // Geminiがパケットを作る前に、入力欄を伏せ字で「物理的に破壊」して上書き
-            inputField.focus();
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, shieldedText);
-            
-            // Geminiに「中身が変わったぞ」と強制的に分からせる
-            ['input', 'change', 'compositionend'].forEach(t => 
-                inputField.dispatchEvent(new Event(t, { bubbles: true }))
-            );
+        // 判定：伏せ字があるなら、問答無用で止めてチップを出す
+        if (count > 0) {
+            e.preventDefault();
+            e.stopImmediatePropagation(); // 他のスクリプト（Google）への通知を完全に遮断
+            e.stopPropagation();
 
-            // ここでようやくポップアップを出して、最終確認
             renderChip(sendBtn, {
                 title: "🛡️ DSSI 内容保護シールド",
-                body: `${maskCount} 件の機密情報を検知しました。伏せ字で送信します。`,
-                protectedLabel: "🛡️ 送信を承認",
-                rawLabel: "キャンセル"
+                borderColor: "#3498db",
+                fact: `${count} 件の情報を検知しました。`,
+                purpose: "【DSSI】 外部への実名送信を制限しています。",
+                risk: "実名を送るとGoogleの学習データに含まれるリスクがあります。",
+                rec: "保護して送信するか、原文で送るかを選択してください。"
             }, true, (result) => {
                 if (result === 'protected') {
-                    // すでに伏せ字になっているので、そのまま送信
+                    if (inputField) {
+                        inputField.innerText = shieldedText;
+                        inputField.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
                     sendBtn.dataset.shieldVerified = "true";
                     sendBtn.click();
-                    setTimeout(() => delete sendBtn.dataset.shieldVerified, 500);
+                } else if (result === 'raw') {
+                    sendBtn.dataset.shieldVerified = "true";
+                    sendBtn.click();
                 }
-                // キャンセルの場合はそのまま何もしない（入力欄は伏せ字のまま残る）
             });
-            return true; // シールド発動
         }
-        return false; // シールド不要
-    };
+    }, true); // ★ここを true にするのが、DSSIが先行する鍵です
+}
 
-    // 【2】 裏口（Enterキー）を最速で封鎖
-    // clickイベントより先に発生するkeydownをキャプチャモードで捕まえる
-    inputField.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-            if (sendBtn.dataset.shieldVerified !== "true") {
-                // Geminiの送信処理を完全に握りつぶす
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                
-                runDssiLogic(); // 即座に検閲ロジックへ
-                return false;
+// 判定：実際に何が飛んだかを画面上で確認
+function validateDssiEffect(expected) {
+    setTimeout(() => {
+        const userBubbles = document.querySelectorAll('[data-message-author-role="user"]');
+        if (userBubbles.length > 0) {
+            const lastMsg = userBubbles[userBubbles.length - 1].innerText;
+            if (lastMsg.includes('[FOOF') || lastMsg.includes('[TEST_MASK]')) {
+                showValidationResult("✅ DSSI: 変換して送信されました。", "success");
+            } else {
+                showValidationResult("⚠️ 警告: 変換前の生文が送信された可能性があります。", "error");
             }
         }
+    }, 1500);
+
+// ユーザーに現状を伝えるための通知関数
+function showStatusNotification(msg) {
+    const notify = document.createElement('div');
+    notify.innerText = msg;
+    notify.style.cssText = `
+        position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+        background: #333; color: #fff; padding: 10px 20px; border-radius: 5px;
+        z-index: 10000; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    `;
+    document.body.appendChild(notify);
+    setTimeout(() => notify.remove(), 3000);
+}
+
+    // Enterキーとクリック、両方のルートをキャプチャモードで監視
+    inputField.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) handleTransmission(e);
     }, true);
 
-    // 【3】 正門（送信ボタン）も「触れた瞬間」に制圧
-    sendBtn.addEventListener('mousedown', (e) => {
-        if (sendBtn.dataset.shieldVerified !== "true") {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            runDssiLogic();
-        }
-    }, true);
+    sendBtn.addEventListener('mousedown', handleTransmission, true);
 }
 
 /**
