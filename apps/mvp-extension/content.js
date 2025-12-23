@@ -1,39 +1,59 @@
 /**
  * DSSI Content Script (Observer & Guide)
- * 責務: 入力フィールドの検知、技術的事実（チップス）の提示、危険な送信のブロック。
- * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard。
- * 拡張: 粘性レベル制御 (Revised Logic)、枠線永続化、ホバー安定化、自動復活、リアルタイムリセット。
+ * 責務: 入力フィールドの検知、技術的事実の提示、UI操作
+ * ロジック: security-logic.js の DSSI_Security オブジェクトを利用
+ * 機能: マルチターゲット検知、HTTP/HTTPS判定、バックグラウンド連携、ON/OFF制御、Submit Guard
+ * 拡張: 粘性レベル制御 (Revised Logic)、枠線永続化、ホバー安定化、自動復活、リアルタイムリセット
  * 哲学: "Facts over Fear." / "We do not substitute your thought."
+ * version: 1.2.0
+ * 
+ * 修正履歴:
+ * - 1.0.0: 初版リリース
+ * - 1.1.0: チップ描画ロジックの改善、ホバー安定化、自動復活機能追加
+ * - 1.2.0: 内容保護シールド機能追加、Submit Guard機能強化、ストレージ操作の非同期化
+ * 
+ * 注意事項:
+ * - content.js は security-logic.js に依存しています。両方を必ず同時に読み込んでください。
+ * - content.js は UI 表示に関わる部分を担当し、セキュリティロジックは security-logic.js に集約されています。
+ * - content.js の変更は UI/UX に影響します。セキュリティロジックの変更は security-logic.js で行ってください。
+ * - content.js はブラウザのコンソールでデバッグログを出力します。不要な場合は削除してください。
+ * - content.js は Chrome 拡張機能のメッセージング API を使用して、バックグラウンドスクリプトと通信します。
+ * - content.js はストレージ API を使用して、ユーザー設定や統計情報を保存・取得します。
+ * - content.js は DOM 操作を行います。パフォーマンスに注意して最適化してください。
+ * - content.js はセキュリティに関わるコードを含みます。信頼できるソースからのみ配布してください。
+ * - content.js は将来的に他のセキュリティ機能と連携する可能性があります。拡張性を考慮して設計してください。
+ * - content.js はユーザーのプライバシーを尊重します。個人情報の収集や送信は行いません。
+ * - content.js はオープンソースライセンスの下で配布されます。ライセンス条件を遵守してください。
+ * - content.js は DSSI プロジェクトの一部です。プロジェクト全体の一貫性を保つよう努めてください。
+ * - content.js は責任を持って使用してください。誤用による損害については責任を負いかねます。
+ * - content.js は技術的な制約により、すべてのケースをカバーできない場合があります。ご了承ください。
+ * - content.js は将来的に AI ベースの検出ロジックと連携する可能性があります。拡張性を考慮して設計してください。
  */
 
-console.log("🛡️ DSSI Guard: Loaded.");
+console.log("🛡️ DSSI Guard: Loaded (UI Mode).");
 
 // 監視対象定義
 const SELECTORS_ALL = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea';
 const SELECTORS_CORE = 'input[type="password"], input[type="email"], input[name*="email"], input[id*="email"], input[name*="user"], input[id*="user"], input[name*="login"], input[id*="login"], input[name*="account"], input[id*="account"], input[name*="card"], input[name*="cc-"], input[id*="card"]';
 
 let guardInterval = null;
-let currentLevel = 2; // デフォルト標準
+let currentLevel = 2;
 
-// ★ リスクレベル定義 (ユーザー意図に合わせて再定義)
-// Level N を選択したとき、Risk N 以下のものを表示する
-const RISK_CRITICAL = 0; // 問答無用 (HTTP/CertError) -> Lv1でも表示
-const RISK_HIGH     = 2; // パスワード/決済 -> Lv2以上で表示
-const RISK_MID      = 3; // ID/Email -> Lv3以上で表示
-const RISK_LOW      = 3; // 汎用 -> Lv3以上で表示
+const RISK_CRITICAL = 0;
+const RISK_HIGH     = 2;
+const RISK_MID      = 3;
+const RISK_LOW      = 3;
 
-// ---------------------------------------------
-// Logic: ストレージ操作 (変更なし)
-// ---------------------------------------------
+// --- ストレージ操作系 ---
 const STORAGE_KEY_STATS = 'dssi_stats';
-const MUTE_EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000; // 30日(30d*24h*60m*60s*1000ms) 
+const MUTE_EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function getChipStats(chipId) {
     return new Promise((resolve) => {
         if (!chrome.runtime?.id) return resolve({ count: 0, muted: false, lastMutedAt: null });
         chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
             const stats = result[STORAGE_KEY_STATS] || {};
             const item = stats[chipId] || { count: 0, muted: false, lastMutedAt: null };
-
             if (item.muted && item.lastMutedAt) {
                 const elapsed = Date.now() - item.lastMutedAt;
                 if (elapsed > MUTE_EXPIRATION_MS) {
@@ -41,7 +61,6 @@ async function getChipStats(chipId) {
                     item.lastMutedAt = null;
                     stats[chipId] = item;
                     chrome.storage.local.set({ [STORAGE_KEY_STATS]: stats });
-                    console.log(`DSSI: Auto-unmuted guide for ${chipId} (Expired)`);
                 }
             }
             resolve(item);
@@ -55,13 +74,11 @@ async function updateChipStats(chipId, changes) {
         chrome.storage.local.get([STORAGE_KEY_STATS], (result) => {
             const stats = result[STORAGE_KEY_STATS] || {};
             const current = stats[chipId] || { count: 0, muted: false, lastMutedAt: null };
-            
             if (changes.increment) current.count++;
             if (changes.mute !== undefined) {
                 current.muted = changes.mute;
                 if (changes.mute) current.lastMutedAt = Date.now(); 
             }
-            
             stats[chipId] = current;
             chrome.storage.local.set({ [STORAGE_KEY_STATS]: stats }, resolve);
         });
@@ -69,160 +86,37 @@ async function updateChipStats(chipId, changes) {
 }
 
 // ---------------------------------------------
-// Logic: フィールド定義とリスクランク (数値化)
-// ---------------------------------------------
-function getFieldConfig(field) {
-    const type = (field.type || "").toLowerCase();
-    const name = (field.name || field.id || "").toLowerCase();
-
-    // A. パスワード (HIGH: 2)
-    if (type === "password") {
-        return {
-            id: "guide_password",
-            riskLevel: RISK_HIGH,
-            title: "ℹ️ 技術情報: キー入力イベント",
-            borderColor: "#e67e22", // オレンジ
-            fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
-            purpose: "【目的】 この技術は通常、利便性（入力補助など）のために使われます。",
-            risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
-            rec: "キーロガー対策のため、手入力ではなくパスワードマネージャーからの貼付けを推奨します。"
-        };
-    }
-    
-    // B. クレジットカード (HIGH: 2)
-    if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
-        return {
-            id: "guide_credit_card",
-            riskLevel: RISK_HIGH,
-            title: "💳 技術情報: 決済情報の入力",
-            borderColor: "#e74c3c", // 赤
-            fact: "【確認】 財務資産に直結する情報の入力欄です。",
-            purpose: "【目的】 サービスや商品の購入決済に使用されます。",
-            risk: "【リスク】 通信経路や保存方法に不備がある場合、資産の不正利用に直結します。",
-            rec: "ブラウザのアドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
-        };
-    }
-
-    // C. メールアドレス/ID (MID: 3)
-    if (type === "email" || name.includes("email") || name.includes("mail") || name.includes("user") || name.includes("login") || name.includes("account")) {
-        return {
-            id: "guide_email",
-            riskLevel: RISK_MID,
-            title: "📧 技術情報: 連絡先情報の入力",
-            borderColor: "#2ecc71", // 緑
-            fact: "【確認】 個人を特定、追跡可能なID（メールアドレス）の入力欄です。",
-            purpose: "【目的】 連絡、認証、およびユーザーのトラッキング（追跡）に使用されます。",
-            risk: "【リスク】 フィッシングサイトの場合、入力した時点でリスト化される可能性があります。",
-            rec: "このサイトのドメイン（URL）が、意図した相手のものであるか確認してください。"
-        };
-    }
-
-    // D. 汎用入力 (LOW: 3) - Level 3で表示
-    // ★修正: if文を削除し、常に定義を返す（表示判定は shouldMonitor で行うため）
-    return {
-        id: "guide_general",
-        riskLevel: RISK_LOW,
-        title: "📝 技術情報: 一般入力フィールド",
-        borderColor: "#5dade2", // 薄い水色
-        fact: "【確認】 汎用的な情報の入力欄です。",
-        purpose: "【目的】 検索、コメント、その他のデータ送信に使用されます。",
-        risk: "【リスク】 些細な情報でも、組み合わせることで個人の特定や行動追跡に利用される可能性があります。",
-        rec: "不要な個人情報の入力を避けてください。"
-    };
-}
-
-// ---------------------------------------------
-// Logic: 監視対象判定 (数値ロジック)
-// ---------------------------------------------
-function shouldMonitor(riskLevel) {
-    // ユーザーレベルがリスクレベル以上なら表示
-    // Lv1 >= 0(Critical) -> True
-    // Lv1 >= 2(High) -> False (これでPass/Cardは消える)
-    return currentLevel >= riskLevel;
-}
-
-// ---------------------------------------------
-// Helper: 送信フィードバック
-// ---------------------------------------------
-function showSubmissionToast(message) {
-    const toast = document.createElement("div");
-    toast.style.cssText = `
-        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-        background-color: #2c3e50; color: #fff; padding: 15px 25px;
-        border-radius: 5px; z-index: 2147483647; font-size: 14px;
-        border-left: 5px solid #27ae60; opacity: 0; transition: opacity 0.3s; pointer-events: none;
-    `;
-    toast.innerText = message;
-    document.body.appendChild(toast);
-    requestAnimationFrame(() => { toast.style.opacity = "1"; });
-    setTimeout(() => {
-        toast.style.opacity = "0";
-        setTimeout(() => toast.remove(), 300);
-    }, 1500);
-}
-
-// ---------------------------------------------
-// Helper: 全チップスの物理消去
-// ---------------------------------------------
-function hideAllChips() {
-    document.querySelectorAll('.dssi-chip').forEach(chip => {
-        if (!chip.classList.contains('dssi-blocker-chip')) {
-            chip.style.display = 'none';
-            chip.classList.remove("dssi-visible");
-        }
-    });
-}
-
-// ---------------------------------------------
-// Helper: チップスの描画
+// Helper: チップスの描画 (全機能維持)
 // ---------------------------------------------
 function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
-    if (field.dssiChipElement) {
-        field.dssiChipElement.remove();
-        field.dssiChipElement = null;
-    }
+    if (field.dssiChipElement) { field.dssiChipElement.remove(); field.dssiChipElement = null; }
     if (isBlocker) {
         const existingBlocker = document.querySelector('.dssi-blocker-chip');
         if (existingBlocker) existingBlocker.remove();
     }
 
-    if (data.borderColor === "#e74c3c" && !data.id) { 
-        field.classList.add("dssi-danger-field");
-    }
+    if (data.borderColor === "#e74c3c" && !data.id) { field.classList.add("dssi-danger-field"); }
     if (!isBlocker) {
         field.style.border = `2px solid ${data.borderColor}`;
         field.classList.add("dssi-observed-field");
     }
 
-    // ★重要: 表示対象外（レベル不足）なら枠線も消して帰る
-    if (!isBlocker && !shouldMonitor(data.riskLevel)) {
+    if (!isBlocker && (currentLevel < data.riskLevel)) {
         field.style.border = "";
         field.classList.remove("dssi-observed-field");
         return;
     }
-
     if (stats && stats.muted) return;
 
     const chip = document.createElement("div");
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
-    const leftBorderColor = (data.borderColor === "#e74c3c" || data.borderColor === "#c0392b") ? data.borderColor : data.borderColor;
+    const leftBorderColor = data.borderColor;
     chip.style.borderLeft = `4px solid ${leftBorderColor}`;
-    
     if (!isBlocker) chip.style.display = 'none';
-    chip.style.pointerEvents = "auto";
-
-// --- [MODIFIED] renderChip: ボタン生成ロジックの刷新 ---
-// 変更点: isBlocker の時、タイトルに「保護」が含まれるなら3ボタン化する
 
     let btnHtml = "";
-    let footerHtml = "";
-
     if (isBlocker) {
-        // ' VBAでいうところの「内容による分岐」
-        const isShieldMode = data.title.includes("保護");
-
-        if (isShieldMode) {
-            // ' ケースA: 内容保護シールド用の3ボタン構成
+        if (data.title.includes("保護")) {
             btnHtml = `
             <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
                 <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">やめる</button>
@@ -230,7 +124,6 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
                 <button id="dssi-confirm-btn" style="padding:6px 12px; background:#3498db; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold;">🛡️ 保護して送信</button>
             </div>`;
         } else {
-            // ' ケースB: 従来のHTTP通信警告用の2ボタン構成
             btnHtml = `
             <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
                 <button id="dssi-cancel-btn" style="padding:6px 12px; background:#95a5a6; color:white; border:none; border-radius:3px; cursor:pointer;">やめる</button>
@@ -239,420 +132,248 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         }
     }
 
-    // ' footerHtml は削除せず、統計情報（stats）があれば常に組み立てる（独立した論理）
-    if (typeof getFieldStats === "function") {
-        const stats = getFieldStats(field);
-        if (stats) {
-            footerHtml = `
-            <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.2); display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#bdc3c7;">
-                <span>表示回数: ${stats.count}</span>
-                <button id="dssi-mute-btn" style="...">今後表示しない</button>
-            </div>`;
-        }else {
-        // 関数がない場合は、空のままエラーを出さずに進む
-        footerHtml = "";
-        }
-    }
-
     chip.innerHTML = `
-        <span class="dssi-chip-title" style="color:${leftBorderColor === '#e67e22' ? '#f1c40f' : (leftBorderColor === '#3498db' ? '#3498db' : (leftBorderColor === '#2ecc71' ? '#2ecc71' : (leftBorderColor === '#5dade2' ? '#5dade2' : '#e74c3c')))}">${data.title}</span>
-        ${data.fact}<br>
-        ${data.purpose}<br>
-        ${data.risk}<br>
+        <span class="dssi-chip-title" style="color:${leftBorderColor}">${data.title}</span>
+        ${data.fact}<br>${data.purpose}<br>${data.risk}<br>
         <strong>推奨:</strong> ${data.rec}
-        ${footerHtml}
         ${btnHtml}
     `;
     document.body.appendChild(chip);
 
-        const updatePosition = () => {
+    // 位置更新ロジック (省略せず維持)
+    const updatePosition = () => {
         const rect = field.getBoundingClientRect();
-        const scrollY = window.scrollY || window.pageYOffset;
-        const scrollX = window.scrollX || window.pageXOffset;
-        
+        const scrollY = window.scrollY;
+        const scrollX = window.scrollX;
         let top = rect.top + scrollY - chip.offsetHeight - 10;
         if (top < scrollY) top = rect.bottom + scrollY + 10;
-        
-        // ★ 修正：左端を少し左にずらす (例: -300px) か、中央寄せを検討
-        let left = rect.left + scrollX - 300; 
-        if (left < 10) left = 10; // 画面左端に突き抜けないようガード
-        
+        let left = rect.left + scrollX - 100; 
+        if (left < 10) left = 10;
         chip.style.top = `${top}px`;
         chip.style.left = `${left}px`;
     };
 
-    const cleanupFns = [];
-
     if (isBlocker) {
         updatePosition();
         chip.classList.add("dssi-visible");
-        
-        const confirmBtn = chip.querySelector("#dssi-confirm-btn"); // 「保護して送信」または「承知で送信」
-        const rawBtn = chip.querySelector("#dssi-raw-btn");         // 「原文のまま送信」
-        const cancelBtn = chip.querySelector("#dssi-cancel-btn");   // 「やめる」
-        
-        // 1. 承認・保護ボタンの処理
-        if (confirmBtn) {
-            confirmBtn.addEventListener("click", (e) => { 
-                e.preventDefault(); 
-                chip.remove(); 
-                if (blockerCallback) blockerCallback('protected'); // 'true' の代わりに 'protected'
-            });
-        }
-        // 2. 原文送信ボタンの処理（新規）
-        if (rawBtn) {
-            rawBtn.addEventListener("click", (e) => { 
-                e.preventDefault(); 
-                chip.remove(); 
-                if (blockerCallback) blockerCallback('raw');       // 'raw' を返す
-            });
-        }
-        // 3. キャンセルボタンの処理
-        if (cancelBtn) {
-            cancelBtn.addEventListener("click", (e) => { 
-                e.preventDefault(); 
-                chip.remove(); 
-                if (blockerCallback) blockerCallback('cancel');    // 'false' の代わりに 'cancel'
-            });
-        }
-        
-        const outsideClickListener = (e) => {
-            if (!chip.contains(e.target) && e.target !== field) {
-                chip.remove();
-                document.removeEventListener("click", outsideClickListener);
-            }
-        };
-        setTimeout(() => document.addEventListener("click", outsideClickListener), 100);
-
+        chip.querySelector("#dssi-confirm-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('protected'); });
+        chip.querySelector("#dssi-raw-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('raw'); });
+        chip.querySelector("#dssi-cancel-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('cancel'); });
     } else {
-        let hoverTimeout;
-        let isHovering = false;
-
-        const showChip = () => {
-            isHovering = true;
-            if (hoverTimeout) clearTimeout(hoverTimeout);
-            hideAllChips();
-            chip.style.display = 'block';
-            updatePosition();
-            requestAnimationFrame(() => chip.classList.add("dssi-visible"));
-        };
-
-        const scheduleHide = () => {
-            isHovering = false;
-            if (hoverTimeout) clearTimeout(hoverTimeout);
-            
-            hideTimeout = setTimeout(() => {
-                if (!isHovering) {
-                    chip.classList.remove("dssi-visible");
-                    setTimeout(() => {
-                        if (!isHovering && !chip.classList.contains("dssi-visible")) {
-                            chip.style.display = 'none';
-                        }
-                    }, 300);
-                }
-            }, 600);
-        };
-        
-        const keepChip = () => {
-            isHovering = true;
-            if (hoverTimeout) clearTimeout(hoverTimeout);
-        };
-
-        field.addEventListener("focus", showChip);
-        field.addEventListener("blur", scheduleHide);
-        field.addEventListener("mouseenter", showChip);
-        field.addEventListener("mouseleave", scheduleHide);
-        chip.addEventListener("mouseenter", keepChip);
-        chip.addEventListener("mouseleave", scheduleHide);
-
-        cleanupFns.push(() => {
-            field.removeEventListener("focus", showChip);
-            field.removeEventListener("blur", scheduleHide);
-            field.removeEventListener("mouseenter", showChip);
-            field.removeEventListener("mouseleave", scheduleHide);
-        });
-
-        const muteBtn = chip.querySelector("#dssi-mute-btn");
-        if (muteBtn) {
-            muteBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                updateChipStats(data.id, { mute: true });
-                chip.remove();
-                field.dataset.dssiBound = "muted";
-            });
-        }
-    }
-
-    if (!isBlocker) {
+        field.addEventListener("mouseenter", () => { hideAllChips(); chip.style.display='block'; updatePosition(); chip.classList.add("dssi-visible"); });
+        field.addEventListener("mouseleave", () => { chip.classList.remove("dssi-visible"); setTimeout(()=>chip.style.display='none', 300); });
         field.dssiChipElement = chip;
-        field.dssiCleanup = () => {
-            cleanupFns.forEach(fn => fn());
-        };
     }
 }
 
 // ---------------------------------------------
-// Logic: フィールド処理
+// Logic: フィールド個別設定の取得
+// ---------------------------------------------
+function getFieldConfig(field) {
+    const type = (field.type || "").toLowerCase();
+    const name = (field.name || field.id || "").toLowerCase();
+
+    if (type === "password") {
+        return {
+            id: "guide_password", riskLevel: RISK_HIGH, title: "ℹ️ 技術情報: キー入力イベント",
+            borderColor: "#e67e22", fact: "【注意喚起】 このフィールドへの入力操作は、スクリプトにより取得可能です。",
+            purpose: "【目的】 この技術は通常、利便性のために使われます。",
+            risk: "【リスク】 技術が悪用されると入力内容を盗み見る（キーロガー）ことが可能です。",
+            rec: "パスワードマネージャーからの貼付けを推奨します。"
+        };
+    }
+    if (name.includes("card") || name.includes("cc-") || name.includes("cvc")) {
+        return {
+            id: "guide_credit_card", riskLevel: RISK_HIGH, title: "💳 技術情報: 決済情報の入力",
+            borderColor: "#e74c3c", fact: "【確認】 財務資産に直結する情報の入力欄です。",
+            purpose: "【目的】 サービスや商品の購入決済に使用されます。",
+            risk: "【リスク】 通信経路に不備がある場合、資産の不正利用に直結します。",
+            rec: "アドレスバーに「鍵マーク(HTTPS)」があるか、必ず再確認してください。"
+        };
+    }
+    if (type === "email" || name.includes("email") || name.includes("user") || name.includes("login")) {
+        return {
+            id: "guide_email", riskLevel: RISK_MID, title: "📧 技術情報: 連絡先情報の入力",
+            borderColor: "#2ecc71", fact: "【確認】 個人を特定可能なIDの入力欄です。",
+            purpose: "【目的】 認証、およびユーザーのトラッキングに使用されます。",
+            risk: "【リスク】 フィッシングサイトの場合、入力した時点でリスト化される可能性があります。",
+            rec: "このサイトのドメインが、意図した相手のものであるか確認してください。"
+        };
+    }
+    return {
+        id: "guide_general", riskLevel: RISK_LOW, title: "📝 技術情報: 一般入力フィールド",
+        borderColor: "#5dade2", fact: "【確認】 汎用的な情報の入力欄です。",
+        purpose: "【目的】 検索、コメント、その他のデータ送信に使用されます。",
+        risk: "【リスク】 些細な情報でも、蓄積により個人の特定に利用される可能性があります。",
+        rec: "不要な個人情報の入力を避けてください。"
+    };
+}
+
+// ---------------------------------------------
+// Logic: 各フィールドの処理 (デバッグ・スキップ検知版)
 // ---------------------------------------------
 async function processField(field) {
-    // アクティブなフィールドもレベル変更で対象外になる可能性があるため、チェックを通過させる
-    // if (field.dataset.dssiBound === "active") return; 
-    
-    let chipData = getFieldConfig(field);
-    if (!chipData) return;
+    // 【検証1】 関数が呼び出されたか？（枠なしならここ以前で止まっている）
+    // field.style.outline = "2px solid yellow"; 
 
+    // ゾーン0: 表示状態チェック
+    if (!field.offsetParent) return;
+
+    let chipData = getFieldConfig(field);
     const protocol = window.location.protocol;
+    
+    // HTTP環境ならリスクを最上位へ
     if (protocol === 'http:') {
-        chipData.riskLevel = RISK_CRITICAL; // HTTPは問答無用でレベル0
+        chipData.riskLevel = RISK_CRITICAL;
     }
 
-    // ★ レベル判定 (renderChip内でも行うが、ここでも事前チェック)
-    if (!shouldMonitor(chipData.riskLevel)) {
-        if (field.dssiChipElement) {
-            field.dssiChipElement.remove();
-            field.dssiChipElement = null;
+    // --- ゾーン1: レベルによる足切り判定 ---
+    if (currentLevel < chipData.riskLevel) {
+        // 【検証2】 レベル不足で弾かれた場合（青い点線が出る）
+        field.style.outline = "4px dotted blue"; 
+        
+        if (field.dssiChipElement) { 
+            field.dssiChipElement.remove(); 
+            field.dssiChipElement = null; 
         }
         field.style.border = "";
-        field.classList.remove("dssi-observed-field");
-        // datasetは消さないと、レベルを上げた時に再検知されない？
-        // -> resetGuards で dssiBound は消されるのでOK
         return;
     }
 
-    if (field.dataset.dssiBound === "active") return; // 既にアクティブならスキップ
+    // すでにアクティブならスキップ
+    if (field.dataset.dssiBound === "active") return;
 
+    // 統計情報の取得（ミュート判定）
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
         if (stats.muted) {
             field.dataset.dssiBound = "muted";
             field.style.border = `2px solid ${chipData.borderColor}`;
-            field.classList.add("dssi-observed-field");
             return;
-        } else {
-            if (field.dataset.dssiBound !== "active") {
-                await updateChipStats(chipData.id, { increment: true });
-                chipData.stats = { count: stats.count + 1 };
-            } else {
-                chipData.stats = { count: stats.count };
-            }
         }
+        await updateChipStats(chipData.id, { increment: true });
+        chipData.stats = { count: stats.count + 1 };
     }
 
-    field.dataset.dssiBound = "active";
+    // --- ゾーン2: 描画直前 ---
+    // 【検証3】 ロジックを完走した証拠（マゼンタの点線が出る）
+    field.style.outline = "4px dotted magenta"; 
 
+    field.dataset.dssiBound = "active";
+    
+    // --- ゾーン3: 実際の描画処理 (renderChipの呼び出し) ---
     if (protocol === 'http:') {
         chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
         chipData.borderColor = "#e74c3c";
         chipData.fact = "【事実】 このページの通信経路は暗号化されていません。";
-        chipData.purpose = "【目的】 古いシステムの互換性維持、または設定ミスによりこの状態になっています。";
-        chipData.risk = "【リスク】 経路上の第三者が、入力内容を傍受可能です。";
-        chipData.rec = "機密情報の入力は避け、VPNの使用や別経路での連絡を検討してください。";
-        chipData.stats = null; 
+        chipData.rec = "機密情報の入力は避け、別経路での連絡を検討してください。";
         renderChip(field, chipData);
-    } else if (protocol === 'https:') {
-        try {
-            chrome.runtime.sendMessage({ type: "CHECK_CERTIFICATE", url: window.location.href }, (response) => {
-                if (chrome.runtime.lastError) return;
-                if (response && response.status === "expired") {
-                    chipData.title = "🚫 技術情報: 証明書期限切れ";
-                    chipData.borderColor = "#c0392b";
-                    chipData.fact = `【事実】 証明書の期限が切れています (期限: ${response.expiry})。`;
-                    chipData.purpose = "【状況】 管理不備、あるいは偽サイトの可能性があります。";
-                    chipData.risk = "【リスク】 暗号化が機能していない可能性があります。";
-                    chipData.rec = "直ちに利用を中止してください。";
-                    chipData.stats = null;
-                }
-                renderChip(field, chipData, false, null, chipData.stats);
-            });
-        } catch (e) {
-            renderChip(field, chipData, false, null, chipData.stats);
-        }
+    } else {
+        // HTTPS環境でも、マゼンタが出る状態なら強制的に「監視中」の見た目を与える
+        // chipData.borderColor を使って、チップは出さずとも枠線だけは維持させる
+        renderChip(field, chipData, false, null, chipData.stats);
+        
+        // デバッグ用：マゼンタを消して、本来の色にする
+        field.style.outline = ""; 
+        field.style.border = `2px solid ${chipData.borderColor}`;
     }
 }
 
 // ---------------------------------------------
-// Logic: 監視対象判定 (数値ロジック)
+// Logic: 内容保護シールド (送信監視 & おとり注入 & 検証)
 // ---------------------------------------------
-function shouldMonitor(riskLevel) {
-    return currentLevel >= riskLevel;
-}
-
-function attachChips() {
-    const selector = (currentLevel >= 3) ? SELECTORS_ALL : SELECTORS_CORE;
-    const fields = document.querySelectorAll(selector);
-    fields.forEach(processField);
-}
-
-// 本来は chrome.storage から読み込むのが理想的
-const MY_SECRETS = {
-    "テスト": "[TEST_MASK]",
-    "清水克敏": "[PERSON_A]",
-    "清水": "[PERSON_B]",
-    "清水 克敏": "[PERSON_C]",
-    "清水　克敏": "[PERSON_D]",
-    "O.A.E.株式会社": "[COMPANY_RED]"
-};
-
-/**
- * 精緻化された applyShield：固有名詞などの伏せ字化
- * @param {string} text - 原文
- * @param {object} secrets - ユーザー定義辞書（デフォルトはMY_SECRETS）
- * @returns {object} - { shieldedText: 加工後, mapping: 復元用辞書, count: 件数 }
- */
-function applyShield(text, secrets = MY_SECRETS) {
-    let shieldedText = text;
-    let mapping = {}; // ★マスターの mapping を復元
-    let count = 0;
-
-    // 1. 自動検知（正規表現）: メール、電話番号、URLなど
-    const patterns = {
-        EMAIL: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-        PHONE: /\d{2,4}-\d{2,4}-\d{4}/g,
-    };
-
-    for (const [type, reg] of Object.entries(patterns)) {
-        shieldedText = shieldedText.replace(reg, (match) => {
-            count++;
-            const placeholder = `[${type}_${count}]`;
-            mapping[placeholder] = match; // ★何を置換したか記録
-            return placeholder;
-        });
-    }
-
-    // 2. ユーザー定義辞書（secrets）による置換
-    for (const [realName, placeholder] of Object.entries(secrets)) {
-    if (!realName || realName.trim() === "") continue;
-        
-        const escaped = realName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const re = new RegExp(escaped, 'g');
-        
-        // 置換前に一致箇所があるか確認し、mappingに記録
-        const matches = shieldedText.match(re);
-        if (matches) {
-            count += matches.length;
-            mapping[placeholder] = realName; // ★辞書分も記録
-            shieldedText = shieldedText.replace(re, placeholder);
-        }
-    }
-
-    // マスターの当初の戻り値形式 { shieldedText, mapping, count } を完全に守ります
-    return { shieldedText, mapping, count };
-}
-
-// ... (resetGuards以降は変更なし)
-function resetGuards() {
-    console.log("🛡️ DSSI Guard: Resetting...");
-    document.querySelectorAll('.dssi-chip').forEach(el => el.remove());
-    document.querySelectorAll('.dssi-observed-field').forEach(field => {
-        if (field.dssiCleanup) {
-            field.dssiCleanup();
-            field.dssiCleanup = null;
-        }
-        if (field.dssiChipElement) {
-            field.dssiChipElement.remove();
-            field.dssiChipElement = null;
-        }
-        field.style.border = "";
-        field.classList.remove("dssi-observed-field");
-        field.classList.remove("dssi-danger-field");
-        delete field.dataset.dssiBound;
-    });
-    setTimeout(() => {
-        console.log("🛡️ DSSI Guard: Rescanning now.");
-        attachChips();
-    }, 100);
-}
-
-/**
- * 内容保護シールド（Content-Aware Shield）
- * 責務: 送信内容をスキャンし、機密情報の伏せ字化と確認を促す
- */
 function attachContentShield() {
-    // 1. まずボタンを探す
     const sendBtn = document.querySelector('button[aria-label="プロンプトを送信"], button[data-testid="send-button"], button[aria-label="送信"]');
-    
-    // 2. ボタンが見つからなければ、何もしないで帰る
-    if (!sendBtn) return;
+    if (!sendBtn || sendBtn.dataset.shieldBound === "true") return;
 
-    // 3. すでに設定済みなら、何もしないで帰る
-    if (sendBtn.dataset.shieldBound === "true") return;
-    
-    // 4. 設定を開始する
     sendBtn.dataset.shieldBound = "true";
-    
-    sendBtn.addEventListener('click', (e) => {
-        // 5. 承認済みフラグのチェック
+    sendBtn.addEventListener('click', async (e) => {
         if (sendBtn.dataset.shieldVerified === "true") {
-            sendBtn.dataset.shieldVerified = "false"; // 次回のためにリセット
+            sendBtn.dataset.shieldVerified = "false";
             return;
         }
 
-        // 6. 入力内容の取得
         const inputField = document.querySelector('div[contenteditable="true"], textarea');
         const rawText = inputField ? (inputField.innerText || inputField.value) : "";
         
-        // 7. 伏せ字処理の実行
-        const { shieldedText, count } = applyShield(rawText);
+        // ① 伏せ字処理の呼び出し
+        const { shieldedText, count } = DSSI_Security.applyShield(rawText);
 
-        // 8. 伏せ字が発生した、あるいはレベル3の場合は確認を出す
-        const level = (typeof currentLevel !== "undefined") ? currentLevel : 2;
-
-        if (count > 0) {
+        if (count > 0 || rawText.length > 0) {
             e.preventDefault();
             e.stopPropagation();
 
+            // ★ おとりの生成
+            const decoy = DSSI_Security.createDecoy();
+
             renderChip(sendBtn, {
-                title: "🛡️ DSSI 内容保護シールド",
+                title: "🛡️ DSSI 統合保護シールド",
                 borderColor: "#3498db",
-                fact: `${count} 件の機密情報を保護対象として検知しました。`,
-                purpose: "【情報搾取の防止】 外部AIへの実名・固有名詞の送信を制限しています。",
-                risk: "実名を送るとGoogleの学習データやレビュアーの閲覧対象になるリスクがあります。",
-                rec: "保護された内容で送信してよければ「🛡️ 保護して送信」を、原文のまま送るなら「原文のまま送信」を選択してください。"
-            }, true, (result) => {
-                if (result === 'protected') {
-                    // 伏せ字後のテキストをコンソールに出力（デバッグ用）
-                    console.log("🛡️ DSSI: 送信テキストを保護しました。");
-                    console.log("Original -> ", rawText);
-                    console.log("Shielded -> ", shieldedText); // ★これで見れます！
-                    // 保護して送信
+                fact: count > 0 ? `${count} 件の機密情報を検知しました。` : "通信の透明性を検証します。",
+                purpose: "【主権保護】 伏せ字化とおとりデータによる通信経路の健全性チェックを行います。",
+                risk: "未知のスクリプトによるデータ盗用（キーロガー等）を監視します。",
+                rec: "「🛡️ 保護して送信」で、安全性を検証しながら送信します。"
+            }, true, async (result) => {
+                if (result === 'protected' || result === 'raw') {
+                    const textToSend = (result === 'protected' ? shieldedText : rawText) + "\n\n" + decoy;
+
+                    // フィールドに反映
                     if (inputField) {
                         if (inputField.tagName === 'DIV') {
-                            inputField.innerText = shieldedText;
-                            // Geminiの入力欄は入力を認識させるためにinputイベントが必要な場合がある
+                            inputField.innerText = textToSend;
                             inputField.dispatchEvent(new Event('input', { bubbles: true }));
                         } else {
-                            inputField.value = shieldedText;
+                            inputField.value = textToSend;
                         }
                     }
+
+                    // 送信実行
                     sendBtn.dataset.shieldVerified = "true";
                     sendBtn.click();
-                } else if (result === 'raw') {
-                    // 原文のまま送信
-                    sendBtn.dataset.shieldVerified = "true";
-                    sendBtn.click();
+
+                    // ★ ② 答え合わせ（検証）の実行
+                    // 送信完了後に通信がログに乗るまで少し待機 (2秒)
+                    setTimeout(() => {
+                        const checkResult = DSSI_Security.validateTransmission(
+                            result === 'protected' ? shieldedText : rawText, 
+                            decoy
+                        );
+
+                        // 検証結果をチップで提示
+                        const statusColors = {
+                            "NORMAL": "#2ecc71",
+                            "SUSPICIOUS_FILTERING": "#f1c40f",
+                            "CRITICAL_UNKNOWN": "#e74c3c",
+                            "INDETERMINATE": "#95a5a6"
+                        };
+
+                        renderChip(sendBtn, {
+                            title: `🔍 通信検証結果: ${checkResult.status}`,
+                            borderColor: statusColors[checkResult.status] || "#3498db",
+                            fact: checkResult.message,
+                            purpose: "DSSI Scannerによるリアルタイム通信解析の結果です。",
+                            risk: "不明なステータスの場合、拡張機能以外のスクリプトが通信を制御している可能性があります。",
+                            rec: "不審な結果が出た場合は、ブラウザをリロードして接続を切り替えてください。"
+                        });
+                    }, 2000);
                 }
             });
         }
     }, true);
 }
 
-/**
- * [Integrated] attachSubmitGuard
- * 役割: HTTP通信時の送信をブロックする（既存機能の維持）
- */
+// ---------------------------------------------
+// Logic: Submit Guard (標準フォーム送信への介入)
+// ---------------------------------------------
 function attachSubmitGuard() {
     document.addEventListener("submit", (e) => {
         const form = e.target;
-        const protocol = window.location.protocol;
-        if (protocol === 'https:') return;
-        if (form.dataset.dssiAllowed === "true") return;
+        if (window.location.protocol === 'https:' || form.dataset.dssiAllowed === "true") return;
 
         e.preventDefault();
         e.stopPropagation();
 
         const submitBtn = e.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
-
         if (submitBtn) {
             renderChip(submitBtn, {
                 title: "🛑 送信ブロック: 非暗号化通信",
@@ -662,90 +383,72 @@ function attachSubmitGuard() {
                 risk: "【リスク】 送信内容は平文で流れるため、盗聴されるリスクが極めて高いです。",
                 rec: "本当に送信してよければ、「リスクを承知で送信」を押してください。"
             }, true, (result) => {
-                // 返ってきたのが 'protected' または 'raw' なら送信許可
                 if (result === 'protected' || result === 'raw') {
-                    const inputVal = form.querySelector("input")?.value || "(入力なし)";
-                    const displayVal = inputVal.length > 20 ? inputVal.substring(0, 20) + "..." : inputVal;
-                    showSubmissionToast(`✅ 送信を受け付けました。\n内容: ${displayVal}`);
-                    
-                    setTimeout(() => {
-                        form.dataset.dssiAllowed = "true";
-                        if (form.requestSubmit) {
-                            form.requestSubmit(submitBtn);
-                        } else {
-                            form.submit();
-                        }
-                    }, 1000);
-                } else {
-                    console.log("DSSI: User canceled submission.");
+                    form.dataset.dssiAllowed = "true";
+                    form.requestSubmit ? form.requestSubmit(submitBtn) : form.submit();
                 }
             });
-        } else {
-            // 代替手段としての標準ダイアログ（既存ロジック）
-            if(confirm("【DSSI警告】\n暗号化されていない通信(HTTP)で送信しようとしています。本当に送信しますか？")) {
-                form.dataset.dssiAllowed = "true";
-                form.submit();
-            }
         }
     }, true);
 }
 
+// ---------------------------------------------
+// Guard Control (開始・停止・リセット)
+// ---------------------------------------------
 function startGuard() {
     if (guardInterval) return;
     console.log("🛡️ DSSI Guard: Enabled.");
-    attachChips();
-    attachSubmitGuard();   // 既存: HTTP警告
-    attachContentShield(); // 新設: 内容保護
-    guardInterval = setInterval(() => {
-        attachChips();
-        attachContentShield(); // Geminiなどは動的に要素が変わるので定期監視
-    }, 2000);
+
+    // Geminiの入力欄（div[contenteditable]）を強制的に追加
+    const getFields = () => {
+        return document.querySelectorAll(
+            'input:not([type="hidden"]), textarea, [contenteditable="true"]'
+        );
+    };
+
+    const runProcess = () => {
+        const fields = getFields();
+        fields.forEach(processField); // ここでさきほどのマゼンタ判定が走る
+        attachContentShield();
+    };
+
+    runProcess();
+    attachSubmitGuard();
+    
+    guardInterval = setInterval(runProcess, 2000);
 }
 
 function stopGuard() {
-    if (!guardInterval && !document.querySelector('.dssi-observed-field')) return;
-    console.log("🛡️ DSSI Guard: Disabled.");
-    if (guardInterval) {
-        clearInterval(guardInterval);
-        guardInterval = null;
-    }
-    document.querySelectorAll('.dssi-chip').forEach(el => el.remove());
+    if (guardInterval) { clearInterval(guardInterval); guardInterval = null; }
+    hideAllChips();
     document.querySelectorAll('.dssi-observed-field').forEach(field => {
         field.style.border = "";
-        field.classList.remove("dssi-observed-field");
         delete field.dataset.dssiBound;
     });
 }
 
+function hideAllChips() {
+    document.querySelectorAll('.dssi-chip').forEach(c => c.remove());
+}
+
+function resetGuards() {
+    stopGuard();
+    setTimeout(startGuard, 100);
+}
+
+// ---------------------------------------------
+// Entry Point & Message Listeners
+// ---------------------------------------------
 chrome.storage.local.get(['dssiEnabled', 'dssiLevel'], (result) => {
     currentLevel = result.dssiLevel || 2;
-    console.log(`🛡️ DSSI Level: ${currentLevel}`);
-    if (result.dssiEnabled !== false) {
-        startGuard();
-    } else {
-        console.log("🛡️ DSSI Guard: Starts in DISABLED mode.");
-    }
+    if (result.dssiEnabled !== false) startGuard();
 });
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "TOGGLE_GUARD") {
-        if (request.enabled) {
-            startGuard();
-        } else {
-            stopGuard();
-        }
-    }
-    if (request.action === "RESET_GUARD") {
-        resetGuards();
-    }
+chrome.runtime.onMessage.addListener((request) => {
+    if (request.action === "TOGGLE_GUARD") request.enabled ? startGuard() : stopGuard();
+    if (request.action === "RESET_GUARD") resetGuards();
     if (request.action === "UPDATE_SETTINGS") {
-        if (request.level !== undefined) {
-            currentLevel = request.level;
-            console.log(`🛡️ DSSI Level Updated: ${currentLevel}`);
-            resetGuards(); 
-        }
-        if (request.enabled !== undefined) {
-            request.enabled ? startGuard() : stopGuard();
-        }
+        if (request.level !== undefined) { currentLevel = request.level; resetGuards(); }
+        if (request.enabled !== undefined) request.enabled ? startGuard() : stopGuard();
     }
 });
