@@ -100,8 +100,7 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
         field.style.border = `2px solid ${data.borderColor}`;
         field.classList.add("dssi-observed-field");
     }
-
-    if (!isBlocker && (currentLevel < data.riskLevel)) {
+    if (!isBlocker && currentLevel < 3 && (currentLevel < data.riskLevel)) {
         field.style.border = "";
         field.classList.remove("dssi-observed-field");
         return;
@@ -256,8 +255,63 @@ async function processField(field) {
     }
 
     // --- ゾーン2: 描画直前 ---
-    // 【検証3】 ロジックを完走した証拠（マゼンタの点線が出る）
-    field.style.outline = "4px dotted magenta"; 
+    // 【検証】 ロジックを完走した証拠
+    let debugLabel = document.getElementById(`dssi-debug-${field.id || 'any'}`);
+    if (!debugLabel) {
+        debugLabel = document.createElement('div');
+        debugLabel.id = `dssi-debug-${field.id || 'any'}`;
+        debugLabel.className = 'dssi-debug-popup';
+        // スタイル：画面上の絶対座標で浮かせ、入力欄に干渉させない
+        debugLabel.style = `
+            position: fixed;
+            z-index: 2147483647; 
+            background: rgba(0, 0, 0, 0.8);
+            color: #ff00ff;
+            padding: 5px 8px;
+            font-family: monospace;
+            font-size: 11px;
+            border: 1px solid #ff00ff;
+            border-radius: 4px;
+            pointer-events: none;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            line-height: 1.2;
+        `;
+        document.body.appendChild(debugLabel);
+    }
+
+    // 位置の計算（入力フィールドの右上に配置）
+    const rect = field.getBoundingClientRect();
+    debugLabel.style.top = `${rect.top - 45}px`; // フィールドの少し上
+    debugLabel.style.left = `${rect.left}px`;
+
+    // 表示内容の更新
+    debugLabel.innerHTML = `
+        [DSSI DEBUG]<br>
+        ID: ${chipData.id} | LV: ${currentLevel}/${chipData.riskLevel}<br>
+        STATUS: ${field.dataset.dssiBound}
+    `;
+
+    // フィールドが消えたらラベルも消えるように制御（任意）
+    //if (!field.isConnected) debugLabel.remove();
+        
+    // field.style.outline = ""; 
+    // let debugLabel = field.parentNode.querySelector('.dssi-debug-label');
+    // if (!debugLabel) {
+    //     debugLabel = document.createElement('div');
+    //     debugLabel.className = 'dssi-debug-label';
+    //     debugLabel.style = "font-size:10px; color:magenta; background:rgba(255,255,255,0.8); position:absolute; z-index:10000; padding:2px; border:1px solid magenta; border-radius:3px;";
+    //     field.parentNode.insertBefore(debugLabel, field.nextSibling);
+    // }
+
+    // // 表示するステータス情報の構築
+    // const statusInfo = `
+    //     [DSSI DEBUG]<br>
+    //     判定ID: ${chipData.id}<br>
+    //     要求LV: ${chipData.riskLevel}<br>
+    //     現在LV: ${currentLevel}<br>
+    //     プロトコル: ${protocol}
+    // `;
+    // debugLabel.innerHTML = statusInfo;
 
     field.dataset.dssiBound = "active";
     
@@ -333,19 +387,24 @@ function attachContentShield() {
 
                     // ★ ② 答え合わせ（検証）の実行
                     // 送信完了後に通信がログに乗るまで少し待機 (2秒)
+                    // ★ ② 答え合わせ（検証）の実行
                     setTimeout(() => {
+                        console.log("🛡️ DSSI: 通信検証フェーズ開始...");
+                        
                         const checkResult = DSSI_Security.validateTransmission(
                             result === 'protected' ? shieldedText : rawText, 
                             decoy
                         );
 
-                        // 検証結果をチップで提示
-                        const statusColors = {
-                            "NORMAL": "#2ecc71",
-                            "SUSPICIOUS_FILTERING": "#f1c40f",
-                            "CRITICAL_UNKNOWN": "#e74c3c",
-                            "INDETERMINATE": "#95a5a6"
-                        };
+                        // デバッグ：検証結果をコンソールと画面に強制表示
+                        console.log("🛡️ 検証結果:", checkResult);
+
+                        // 既存の renderChip が失敗してもいいように、直接アラートを出すかログ用ラベルを更新
+                        const debugLabel = document.querySelector('.dssi-debug-label');
+                        if (debugLabel) {
+                            debugLabel.innerHTML += `<br>検証結果: ${checkResult.status}`;
+                            debugLabel.style.borderColor = "yellow"; // 検証が走った合図
+                        }
 
                         renderChip(sendBtn, {
                             title: `🔍 通信検証結果: ${checkResult.status}`,
@@ -356,6 +415,30 @@ function attachContentShield() {
                             rec: "不審な結果が出た場合は、ブラウザをリロードして接続を切り替えてください。"
                         });
                     }, 2000);
+                    
+                    // setTimeout(() => {
+                    //     const checkResult = DSSI_Security.validateTransmission(
+                    //         result === 'protected' ? shieldedText : rawText, 
+                    //         decoy
+                    //     );
+
+                    //     // 検証結果をチップで提示
+                    //     const statusColors = {
+                    //         "NORMAL": "#2ecc71",
+                    //         "SUSPICIOUS_FILTERING": "#f1c40f",
+                    //         "CRITICAL_UNKNOWN": "#e74c3c",
+                    //         "INDETERMINATE": "#95a5a6"
+                    //     };
+
+                    //     renderChip(sendBtn, {
+                    //         title: `🔍 通信検証結果: ${checkResult.status}`,
+                    //         borderColor: statusColors[checkResult.status] || "#3498db",
+                    //         fact: checkResult.message,
+                    //         purpose: "DSSI Scannerによるリアルタイム通信解析の結果です。",
+                    //         risk: "不明なステータスの場合、拡張機能以外のスクリプトが通信を制御している可能性があります。",
+                    //         rec: "不審な結果が出た場合は、ブラウザをリロードして接続を切り替えてください。"
+                    //     });
+                    // }, 2000);
                 }
             });
         }
