@@ -88,111 +88,77 @@ async function updateChipStats(chipId, changes) {
 // ---------------------------------------------
 // Helper: チップスの描画 (全機能維持)
 // ---------------------------------------------
+/**
+ * v1.2.2: renderChip (介入ロック・座標計算修正版)
+ * 指示: 以前の v1.2.1 から position 計算を fixed に最適化
+ */
 function renderChip(field, data, isBlocker = false, blockerCallback = null, stats = null) {
-    // 1. 同一チップの維持判定（2秒ごとのループで消えるのを防ぐ）
-    const existingChip = isBlocker ? document.querySelector('.dssi-blocker-chip') : field.dssiChipElement;
-    if (existingChip && existingChip.dataset.chipId === data.id) {
-        return; // すでに同じ目的のチップがあれば何もしない
+    const chipId = isBlocker ? 'dssi-blocker-chip' : `dssi-chip-${data.id}`;
+    let chip = document.getElementById(chipId);
+
+    if (chip) {
+        // 既存のチップがある場合は位置だけ更新して return (再生成による消失を防ぐ)
+        if (chip.dssiUpdatePosition) chip.dssiUpdatePosition();
+        return;
     }
 
-    // 2. 異なるチップがあれば掃除
-    if (existingChip) existingChip.remove();
-
-    // 3. レベル制限などのガード
-    if (!isBlocker) {
-        field.style.border = `2px solid ${data.borderColor}`;
-        field.classList.add("dssi-observed-field");
-        if (currentLevel < 3 && (currentLevel < data.riskLevel)) {
-            field.style.border = "";
-            field.classList.remove("dssi-observed-field");
-            return;
-        }
-    }
-    if (stats && stats.muted) return;
-
-    // 4. 要素の生成
-    const chip = document.createElement("div");
+    chip = document.createElement("div");
+    chip.id = chipId;
     chip.className = isBlocker ? "dssi-chip dssi-blocker-chip" : "dssi-chip";
-    chip.dataset.chipId = data.id;
     chip.style.borderLeft = `4px solid ${data.borderColor}`;
     
-    // 非ブロッカー（解説）は最初は隠しておく
-    if (!isBlocker) chip.style.display = 'none';
+    // 位置更新関数の定義 (fixed なので getBoundingClientRect をそのまま利用)
+    const updatePosition = () => {
+        const rect = field.getBoundingClientRect();
+        if (rect.top === 0 && rect.left === 0) return; // 非表示時は更新しない
+        
+        let top = rect.top - chip.offsetHeight - 12;
+        if (top < 10) top = rect.bottom + 12;
+        let left = rect.left;
+        
+        chip.style.top = `${top}px`;
+        chip.style.left = `${left}px`;
+    };
+    chip.dssiUpdatePosition = updatePosition;
 
-    // 5. ボタンHTMLの組み立て
+    // HTMLアセンブリ
     let btnHtml = "";
     if (isBlocker) {
-        const isShield = data.title.includes("保護");
         btnHtml = `
-            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
-                <button id="dssi-cancel-btn" class="dssi-btn-cancel">やめる</button>
-                ${isShield ? '<button id="dssi-raw-btn" class="dssi-btn-raw">原文のまま送信</button>' : ''}
-                <button id="dssi-confirm-btn" class="dssi-btn-confirm">${isShield ? '🛡️ 保護して送信' : 'リスクを承知で送信'}</button>
+            <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+                <button id="dssi-cancel-btn" style="cursor:pointer;">やめる</button>
+                <button id="dssi-raw-btn" style="cursor:pointer;">原文のまま送信</button>
+                <button id="dssi-confirm-btn" style="cursor:pointer; border:2px solid gold; font-weight:bold;">🛡️ 保護して送信</button>
             </div>`;
     }
 
     chip.innerHTML = `
-        <span class="dssi-chip-title" style="color:${data.borderColor}">${data.title}</span>
-        <div>${data.fact}</div>
-        <div>${data.purpose}</div>
-        <div>${data.risk}</div>
-        <strong>推奨:</strong> ${data.rec}
+        <b style="color:${data.borderColor}">${data.title}</b>
+        <div style="font-size:11px; margin-top:4px;">${data.fact}</div>
+        <div style="font-size:11px; color:#ccc;">${data.rec}</div>
         ${btnHtml}
     `;
+
     document.body.appendChild(chip);
+    updatePosition(); // 初回配置
+    chip.classList.add("dssi-visible");
 
-    // 6. 内部関数: 位置更新
-    const updatePosition = () => {
-        const rect = field.getBoundingClientRect();
-        const scrollY = window.scrollY;
-        const scrollX = window.scrollX;
-        let top = rect.top + scrollY - chip.offsetHeight - 10;
-        if (top < scrollY) top = rect.bottom + scrollY + 10;
-        let left = rect.left + scrollX - 20; 
-        if (left < 10) left = 10;
-        chip.style.top = `${top}px`;
-        chip.style.left = `${left}px`;
-    };
-
-    // 7. イベント制御の分岐
     if (isBlocker) {
-        // --- 介入モード: 絶対に消さない ---
-        updatePosition();
-        chip.classList.add("dssi-visible");
-        
-        chip.querySelector("#dssi-confirm-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('protected'); });
-        chip.querySelector("#dssi-raw-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('raw'); });
-        chip.querySelector("#dssi-cancel-btn")?.addEventListener("click", (e) => { e.preventDefault(); chip.remove(); blockerCallback('cancel'); });
+        // ボタンイベント: 明示的なクリックまで remove() しない
+        chip.querySelector("#dssi-confirm-btn").onclick = (e) => { e.preventDefault(); chip.remove(); blockerCallback('protected'); };
+        chip.querySelector("#dssi-raw-btn").onclick = (e) => { e.preventDefault(); chip.remove(); blockerCallback('raw'); };
+        chip.querySelector("#dssi-cancel-btn").onclick = (e) => { e.preventDefault(); chip.remove(); blockerCallback('cancel'); };
     } else {
-        // --- 解説モード: ホバー制御 ---
-        chip.addEventListener("mouseenter", () => { chip.dataset.isHovered = "true"; });
-        chip.addEventListener("mouseleave", () => {
-            chip.dataset.isHovered = "false";
-            if (field.dataset.isFieldHovered !== "true") {
-                chip.classList.remove("dssi-visible");
-                chip.style.display = 'none';
+        // 解説チップ: ホバー連動（時間制御なし）
+        const hide = () => {
+            if (field.dataset.dssiHover !== "true" && chip.dataset.dssiHover !== "true") {
+                chip.remove();
             }
-        });
-
-        field.addEventListener("mouseenter", () => {
-            field.dataset.isFieldHovered = "true";
-            hideAllChips(); // 他のチップを閉じる
-            chip.style.display = 'block'; 
-            updatePosition(); 
-            chip.classList.add("dssi-visible");
-        });
-
-        field.addEventListener("mouseleave", () => {
-            field.dataset.isFieldHovered = "false";
-            setTimeout(() => {
-                if (chip.dataset.isHovered !== "true") {
-                    chip.classList.remove("dssi-visible");
-                    chip.style.display = 'none';
-                }
-            }, 150); 
-        });
-
-        field.dssiChipElement = chip;
+        };
+        field.onmouseenter = () => { field.dataset.dssiHover = "true"; updatePosition(); };
+        field.onmouseleave = () => { field.dataset.dssiHover = "false"; hide(); };
+        chip.onmouseenter = () => { chip.dataset.dssiHover = "true"; };
+        chip.onmouseleave = () => { chip.dataset.dssiHover = "false"; hide(); };
     }
 }
 
@@ -201,33 +167,41 @@ function renderChip(field, data, isBlocker = false, blockerCallback = null, stat
  * 正規の renderChip とは完全に切り離し、body直下に配置する
  */
 function renderDebugPopup(field, chipData) {
-    const protocol = window.location.protocol;
-    let debugLabel = document.getElementById(`dssi-debug-${field.id || 'any'}`);
+    if (!field || !field.isConnected) return;
+
+    // 個別IDがない要素のために、一意のデバッグIDを生成（または既存のものを使用）
+    if (!field.dataset.dssiDebugId) {
+        field.dataset.dssiDebugId = "debug-" + Math.random().toString(36).slice(2, 9);
+    }
+    const debugId = `dssi-debug-${field.dataset.dssiDebugId}`;
+    
+    let debugLabel = document.getElementById(debugId);
 
     if (!debugLabel) {
         debugLabel = document.createElement('div');
-        debugLabel.id = `dssi-debug-${field.id || 'any'}`;
-        debugLabel.className = 'dssi-debug-overlay';
+        debugLabel.id = debugId;
         debugLabel.style = `
-            position: fixed; z-index: 2147483647; background: rgba(0,0,0,0.85);
-            color: #ff00ff; padding: 4px 8px; font-family: monospace; font-size: 10px;
-            border: 1px solid #ff00ff; border-radius: 4px; pointer-events: none;
+            position: fixed; z-index: 2147483647; background: rgba(255,0,255,0.9);
+            color: white; padding: 2px 6px; font-family: monospace; font-size: 9px;
+            border-radius: 2px; pointer-events: none; white-space: nowrap;
         `;
         document.body.appendChild(debugLabel);
     }
 
+    // getBoundingClientRect() は画面上の位置を返すので、
+    // fixed属性の要素にはそのまま（window.scrollを足さずに）適用する
     const rect = field.getBoundingClientRect();
-    debugLabel.style.top = `${rect.top + window.scrollY - 35}px`;
-    debugLabel.style.left = `${rect.left + window.scrollX}px`;
-
-    debugLabel.innerHTML = `
-        [DSSI DEBUG]<br>
-        TYPE: ${field.tagName} | ID: ${chipData.id}<br>
-        LV: ${currentLevel}/${chipData.riskLevel} | BIND: ${field.dataset.dssiBound}
-    `;
     
-    // フィールドが消えたら自分も消える
-    if (!field.isConnected) debugLabel.remove();
+    // フィールドが画面外にある時は隠す
+    if (rect.top < 0 || rect.bottom > window.innerHeight) {
+        debugLabel.style.display = "none";
+    } else {
+        debugLabel.style.display = "block";
+        debugLabel.style.top = `${rect.top - 20}px`; // フィールドの直上に配置
+        debugLabel.style.left = `${rect.left}px`;
+    }
+
+    debugLabel.innerHTML = `[DSSI] ID:${chipData.id} | LV:${currentLevel}/${chipData.riskLevel}`;
 }
 
 // ---------------------------------------------
@@ -276,26 +250,23 @@ function getFieldConfig(field) {
 // ---------------------------------------------
 // Logic: 各フィールドの処理 (メインループ)
 // ---------------------------------------------
+/**
+ * DSSI Content Script: v1.2.4
+ * ステータス: 統計復元・座標同期パッチ適用済
+ */
 async function processField(field) {
-    // ゾーン0: 存在チェック
     if (!field.offsetParent) return;
 
     const chipData = getFieldConfig(field);
-    const protocol = window.location.protocol; // 明示的に定義が必要
+    const protocol = window.location.protocol;
 
-    // 【分離】デバッグ表示（マゼンタ）はここだけで完結
-    // renderChip の外に出したことで、デザイン変更の影響を受けず、
-    // if文による「スキップ」の影響も受けずに常時表示されます。
+    // --- [差分: v1.2.3より継承] デバッグポップを冒頭で必ず更新 ---
     renderDebugPopup(field, chipData);
 
-    // HTTP環境ならリスクを最上位へ
-    if (protocol === 'http:') {
-        chipData.riskLevel = 0; // RISK_CRITICAL
-    }
+    if (protocol === 'http:') chipData.riskLevel = 0;
 
-    // --- ゾーン1: レベルによる足切り判定 ---
+    // --- [差分: v1.2.1より復元] 足切り時のクリーンアップ ---
     if (currentLevel < chipData.riskLevel) {
-        // レベル不足時は青い点線で可視化
         field.style.outline = "4px dotted blue"; 
         if (field.dssiChipElement) { 
             field.dssiChipElement.remove(); 
@@ -305,10 +276,17 @@ async function processField(field) {
         return;
     }
 
-    // すでにアクティブなら、これ以降の「重い処理（ストレージ等）」をスキップ
-    if (field.dataset.dssiBound === "active") return;
+    // --- [差分: v1.2.3より追加] アクティブ時の座標同期 ---
+    if (field.dataset.dssiBound === "active") {
+        field.style.border = `2px solid ${chipData.borderColor}`;
+        field.style.outline = "";
+        if (field.dssiChipElement && field.dssiChipElement.dssiUpdatePosition) {
+            field.dssiChipElement.dssiUpdatePosition();
+        }
+        return; 
+    }
 
-    // 統計情報の取得（ミュート判定）
+    // --- [差分: v1.2.1より復元] 統計・ミュートロジック ---
     if (chipData.id) {
         const stats = await getChipStats(chipData.id);
         if (stats.muted) {
@@ -320,19 +298,19 @@ async function processField(field) {
         chipData.stats = { count: stats.count + 1 };
     }
 
-    // --- ゾーン2: 実際の描画処理 (renderChip) ---
-    // ここから先は「描画の実行」のみに集中
+    // --- [差分: v1.2.2より修正] 描画フェーズ ---
     field.dataset.dssiBound = "active";
-    field.style.outline = ""; // 青点線を消す
+    field.style.outline = "";
 
     if (protocol === 'http:') {
-        chipData.title = "⚠️ 技術情報: 非暗号化通信 (HTTP)";
-        chipData.borderColor = "#e74c3c";
-        chipData.fact = "【事実】 このページの通信経路は暗号化されていません。";
-        chipData.rec = "機密情報の入力は避け、別経路での連絡を検討してください。";
-        renderChip(field, chipData);
+        renderChip(field, {
+            ...chipData,
+            title: "⚠️ 技術情報: 非暗号化通信 (HTTP)",
+            borderColor: "#e74c3c",
+            fact: "【事実】 このページの通信経路は暗号化されていません。",
+            rec: "機密情報の入力は避け、別経路での連絡を検討してください。"
+        });
     } else {
-        // HTTPS環境：通常の解説チップを描画
         renderChip(field, chipData, false, null, chipData.stats);
         field.style.border = `2px solid ${chipData.borderColor}`;
     }
