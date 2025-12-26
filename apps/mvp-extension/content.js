@@ -398,30 +398,6 @@ function attachContentShield() {
                             rec: "不審な結果が出た場合は、ブラウザをリロードして接続を切り替えてください。"
                         });
                     }, 2000);
-                    
-                    // setTimeout(() => {
-                    //     const checkResult = DSSI_Security.validateTransmission(
-                    //         result === 'protected' ? shieldedText : rawText, 
-                    //         decoy
-                    //     );
-
-                    //     // 検証結果をチップで提示
-                    //     const statusColors = {
-                    //         "NORMAL": "#2ecc71",
-                    //         "SUSPICIOUS_FILTERING": "#f1c40f",
-                    //         "CRITICAL_UNKNOWN": "#e74c3c",
-                    //         "INDETERMINATE": "#95a5a6"
-                    //     };
-
-                    //     renderChip(sendBtn, {
-                    //         title: `🔍 通信検証結果: ${checkResult.status}`,
-                    //         borderColor: statusColors[checkResult.status] || "#3498db",
-                    //         fact: checkResult.message,
-                    //         purpose: "DSSI Scannerによるリアルタイム通信解析の結果です。",
-                    //         risk: "不明なステータスの場合、拡張機能以外のスクリプトが通信を制御している可能性があります。",
-                    //         rec: "不審な結果が出た場合は、ブラウザをリロードして接続を切り替えてください。"
-                    //     });
-                    // }, 2000);
                 }
             });
         }
